@@ -1,0 +1,88 @@
+name: 'Claude autoresearch — setup'
+description: 'Install Claude Code, claude-autoresearch-action agents, and the loop scripts. Used as a step in each job of claude-autoresearch.yml.'
+author: 'Dylan Murray'
+branding:
+  icon: 'rotate-ccw'
+  color: 'purple'
+
+inputs:
+  claude-oauth-token:
+    description: 'Long-lived Claude Code OAuth token (subscription auth). Generate with `claude setup-token`. Provide this OR `anthropic-api-key`.'
+    required: false
+    default: ''
+  anthropic-api-key:
+    description: 'Anthropic API key. Provide this OR `claude-oauth-token`.'
+    required: false
+    default: ''
+  git-user-name:
+    description: 'Git author name for autoresearch commits.'
+    required: false
+    default: 'autoresearch-bot'
+  git-user-email:
+    description: 'Git author email for autoresearch commits.'
+    required: false
+    default: 'autoresearch-bot@users.noreply.github.com'
+
+outputs:
+  claude-path:
+    description: 'Absolute path to the installed claude binary.'
+    value: ${{ steps.install-claude.outputs.claude-path }}
+
+runs:
+  using: composite
+  steps:
+    - name: Verify credentials
+      shell: bash
+      env:
+        OAUTH_TOKEN: ${{ inputs.claude-oauth-token }}
+        API_KEY: ${{ inputs.anthropic-api-key }}
+      run: |
+        set -e
+        if [ -z "$OAUTH_TOKEN" ] && [ -z "$API_KEY" ]; then
+          echo "::error::Provide either \`claude-oauth-token\` (subscription auth) or \`anthropic-api-key\` (API auth)."
+          exit 1
+        fi
+
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '20'
+
+    - name: Install latest Claude Code
+      id: install-claude
+      shell: bash
+      run: |
+        set -e
+        npm install -g @anthropic-ai/claude-code@latest
+        CLAUDE_PATH="$(which claude)"
+        echo "claude path: $CLAUDE_PATH"
+        claude --version
+        echo "claude-path=$CLAUDE_PATH" >> "$GITHUB_OUTPUT"
+
+    - name: Install agents and scripts
+      shell: bash
+      env:
+        ACTION_PATH: ${{ github.action_path }}
+      run: |
+        set -e
+        mkdir -p "$HOME/.claude/agents"
+        cp "$ACTION_PATH/agents/"*.md "$HOME/.claude/agents/"
+        echo "Installed agents at $HOME/.claude/agents/:"
+        ls "$HOME/.claude/agents/"
+
+        mkdir -p "$HOME/.claude/scripts"
+        cp "$ACTION_PATH/scripts/"*.py "$HOME/.claude/scripts/"
+        chmod +x "$HOME/.claude/scripts/"*.py
+        echo "Installed scripts at $HOME/.claude/scripts/:"
+        ls "$HOME/.claude/scripts/"
+
+    - name: Configure git
+      shell: bash
+      env:
+        GIT_USER_NAME: ${{ inputs.git-user-name }}
+        GIT_USER_EMAIL: ${{ inputs.git-user-email }}
+      run: |
+        set -e
+        git config --global user.name "$GIT_USER_NAME"
+        git config --global user.email "$GIT_USER_EMAIL"
+        git config --global init.defaultBranch main

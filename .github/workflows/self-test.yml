@@ -1,0 +1,50 @@
+name: Self-test (smoke)
+
+# Manual smoke test that runs claude-autoresearch.yml against the fixture
+# at fixtures/todo-corpus/. Validates the loop end-to-end without burning
+# significant cost — defaults to 3 iterations on a single goal.
+#
+# Push does NOT trigger this; otherwise pushing the workflow file would
+# loop the action.
+
+on:
+  workflow_dispatch:
+    inputs:
+      max-iterations-per-goal:
+        description: 'Iteration cap (default 3 for smoke)'
+        type: string
+        default: '3'
+      goals-per-run:
+        description: 'How many goals (smoke uses an explicit goal so this is mostly ignored)'
+        type: string
+        default: '1'
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+
+jobs:
+  pipeline:
+    uses: ./.github/workflows/claude-autoresearch.yml
+    secrets: inherit
+    with:
+      max-iterations-per-goal: ${{ inputs.max-iterations-per-goal }}
+      goals-per-run: ${{ inputs.goals-per-run }}
+      plateau-k: '2'
+      max-parallel-goals: '1'
+      fold-in-mode: 'all_above_threshold'
+      fold-in-rating: 'mixed'
+      goals: |
+        [
+          {
+            "id": "todo-corpus-cleanup",
+            "title": "Reduce TODO comments in fixtures/todo-corpus/",
+            "rationale": "Smoke-test goal. fixtures/todo-corpus/sample.py has 6 TODO comments that the loop should remove while preserving Python syntax.",
+            "benchmark_cmd": "grep -rc 'TODO' fixtures/todo-corpus/ 2>/dev/null | awk -F: '{s+=$2} END {print \"METRIC todo_count=\" (s+0)}'",
+            "guard_cmd": "python3 -m py_compile fixtures/todo-corpus/*.py",
+            "direction": "lower_is_better",
+            "scope_files": ["fixtures/todo-corpus/**"],
+            "max_iterations": 3
+          }
+        ]

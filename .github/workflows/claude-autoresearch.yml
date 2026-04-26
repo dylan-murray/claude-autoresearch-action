@@ -1,0 +1,506 @@
+name: Claude autoresearch
+
+# Reusable workflow that runs an autoresearch optimization loop on a repo.
+#
+# Architecture (Karpathy-style autoresearch + multi-goal parallelism + LLM
+# holistic judge):
+#   setup → goal-design → matrix per goal:
+#     autoresearch-loop  (N iterations of propose/measure/keep-or-revert)
+#       ↓
+#     experiment-judge   (holistic end-of-loop verdict)
+#   fold-in (open PRs for qualifying branches) → finish (publish report)
+#
+# Consumers:
+#   jobs:
+#     autoresearch:
+#       uses: dylan-murray/claude-autoresearch-action/.github/workflows/claude-autoresearch.yml@main
+#       secrets: inherit
+#       with:
+#         max-iterations-per-goal: 10
+#         goals-per-run: 2
+
+on:
+  workflow_call:
+    inputs:
+      goals-per-run:
+        type: string
+        default: '1'
+        description: 'How many distinct goals the goal-designer should propose per run. Each goal is its own parallel matrix cell.'
+      max-iterations-per-goal:
+        type: string
+        default: '10'
+        description: 'Iteration cap per goal. Each iteration is one propose/measure/keep-or-revert step.'
+      plateau-k:
+        type: string
+        default: '3'
+        description: 'Halt the loop after K consecutive iterations with no `kept`.'
+      max-parallel-goals:
+        type: string
+        default: '2'
+        description: 'Matrix max-parallel for goal cells (controls runner concurrency).'
+      goals:
+        type: string
+        default: ''
+        description: 'Optional JSON array of explicit goals (skips goal-designer ideation). See agents/goal-designer.md for schema.'
+      boldness:
+        type: string
+        default: balanced
+        description: 'conservative | balanced | bold | experimental — guides goal-designer ambition.'
+      focus:
+        type: string
+        default: ''
+        description: 'Comma-separated focus areas for goal-designer (e.g. tests,security,docs).'
+      ignore:
+        type: string
+        default: ''
+        description: 'Comma-separated glob patterns to ignore when designing goals.'
+      fold-in-mode:
+        type: string
+        default: all_above_threshold
+        description: 'all_above_threshold | best | none'
+      fold-in-rating:
+        type: string
+        default: 'mixed'
+        description: 'Minimum holistic rating to qualify for fold-in: mixed | net_positive'
+      git-user-name:
+        type: string
+        default: 'autoresearch-bot'
+      git-user-email:
+        type: string
+        default: 'autoresearch-bot@users.noreply.github.com'
+    # No declared secrets — consumers use `secrets: inherit` and set
+    # CLAUDE_CODE_OAUTH_TOKEN (subscription) or ANTHROPIC_API_KEY (API).
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+
+env:
+  STATE_BRANCH: autoresearch-state
+
+jobs:
+  # ============================================================================
+  # Stage 0: setup — derive run_id, restore prior state from state-branch
+  # ============================================================================
+  setup:
+    runs-on: ubuntu-latest
+    outputs:
+      run-id: ${{ steps.gen.outputs.run-id }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Derive run-id
+        id: gen
+        run: |
+          set -e
+          RUN_ID="$(date -u +%Y%m%d-%H%M%S)-$(openssl rand -hex 3)"
+          echo "run-id=$RUN_ID" >> "$GITHUB_OUTPUT"
+          echo "run_id=$RUN_ID"
+
+      - name: Restore .autoresearch/ from state branch
+        run: |
+          set -e
+          mkdir -p .autoresearch/memory
+          if git ls-remote --exit-code --heads origin "$STATE_BRANCH" >/dev/null 2>&1; then
+            echo "Restoring .autoresearch/ from $STATE_BRANCH"
+            git fetch --depth=1 origin "$STATE_BRANCH"
+            git archive "origin/$STATE_BRANCH" -- .autoresearch 2>/dev/null | tar -x 2>/dev/null \
+              || echo "State branch exists but has no .autoresearch/ contents"
+          else
+            echo "No state branch yet — starting cold"
+          fi
+
+      - name: Upload state
+        uses: actions/upload-artifact@v4
+        with:
+          include-hidden-files: true
+          name: state
+          path: .autoresearch/
+          if-no-files-found: warn
+          retention-days: 7
+
+  # ============================================================================
+  # Stage 1: goal-design — propose N goals OR pass through user-supplied ones
+  # ============================================================================
+  goal-design:
+    needs: setup
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    outputs:
+      goals-json: ${{ steps.read.outputs.goals-json }}
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - uses: actions/download-artifact@v4
+        with:
+          name: state
+          path: .autoresearch/
+      - uses: ./
+        id: setup-action
+        with:
+          claude-oauth-token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
+          git-user-name: ${{ inputs.git-user-name }}
+          git-user-email: ${{ inputs.git-user-email }}
+
+      - name: Stage goal-designer inputs
+        env:
+          N_GOALS: ${{ inputs.goals-per-run }}
+          BOLDNESS: ${{ inputs.boldness }}
+          FOCUS: ${{ inputs.focus }}
+          IGNORE: ${{ inputs.ignore }}
+          EXPLICIT_GOALS: ${{ inputs.goals }}
+        run: |
+          set -e
+          mkdir -p .autoresearch/goal-design
+
+          # Repo conventions
+          {
+            for f in CLAUDE.md AGENTS.md .cursorrules .windsurfrules; do
+              if [ -f "$f" ]; then
+                echo "=== $f ==="
+                cat "$f"
+                echo
+              fi
+            done
+          } > .autoresearch/goal-design/repo-conventions.md
+
+          # Memory + attempts (best-effort — may be empty on first run)
+          if [ -f .autoresearch/memory/working.md ]; then
+            cp .autoresearch/memory/working.md .autoresearch/goal-design/memory.md
+          else
+            echo "_(no prior runs)_" > .autoresearch/goal-design/memory.md
+          fi
+          if [ -f .autoresearch/attempts.jsonl ]; then
+            cp .autoresearch/attempts.jsonl .autoresearch/goal-design/attempts.jsonl
+          else
+            : > .autoresearch/goal-design/attempts.jsonl
+          fi
+
+          # Config
+          python3 - <<'PY' > .autoresearch/goal-design/config.json
+          import json, os
+          cfg = {
+              "n_goals": int(os.environ.get("N_GOALS") or "1"),
+              "boldness": os.environ.get("BOLDNESS") or "balanced",
+              "focus": [s.strip() for s in (os.environ.get("FOCUS") or "").split(",") if s.strip()],
+              "ignore_globs": [s.strip() for s in (os.environ.get("IGNORE") or "").split(",") if s.strip()],
+          }
+          print(json.dumps(cfg, indent=2))
+          PY
+
+          # Explicit goals override (may be empty string)
+          if [ -n "$EXPLICIT_GOALS" ]; then
+            echo "$EXPLICIT_GOALS" > .autoresearch/goal-design/explicit_goals.json
+          else
+            echo "[]" > .autoresearch/goal-design/explicit_goals.json
+          fi
+
+      - name: Run goal-designer
+        uses: anthropics/claude-code-base-action@beta
+        with:
+          prompt: |
+            You are the goal-designer agent. Read inputs at .autoresearch/goal-design/ — repo-conventions.md, memory.md, attempts.jsonl, config.json, explicit_goals.json — and emit goals to .autoresearch/goal-design/goals.json per agents/goal-designer.md.
+
+            If explicit_goals.json is non-empty, validate the schema and pass through verbatim.
+            Otherwise, propose exactly config.n_goals goals with concrete benchmark commands.
+
+            Print a 5-line summary of chosen goals to stdout.
+          settings: |
+            {"agent":"goal-designer","permissions":{"defaultMode":"bypassPermissions","skipDangerousModePermissionPrompt":true}}
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          path_to_claude_code_executable: ${{ steps.setup-action.outputs.claude-path }}
+          timeout_minutes: '15'
+
+      - name: Read goals for matrix expansion
+        id: read
+        run: |
+          set -e
+          GOALS_FILE=".autoresearch/goal-design/goals.json"
+          if [ ! -f "$GOALS_FILE" ]; then
+            echo "::error::goal-designer did not write $GOALS_FILE"
+            exit 1
+          fi
+          # Emit a slim {id, title} list for matrix expansion (full goal stays in artifact)
+          GOALS_ARRAY=$(python3 -c "import json; d=json.load(open('$GOALS_FILE')); print(json.dumps([{'id':g['id'],'title':g['title']} for g in d]))")
+          echo "goals-json=$GOALS_ARRAY" >> "$GITHUB_OUTPUT"
+          echo "Designed goals: $GOALS_ARRAY"
+
+      - name: Upload goals
+        uses: actions/upload-artifact@v4
+        with:
+          include-hidden-files: true
+          name: goals
+          path: .autoresearch/goal-design/goals.json
+          if-no-files-found: error
+
+  # ============================================================================
+  # Stage 2: autoresearch loop — one matrix cell per goal. Inside each cell,
+  # scripts/autoresearch_loop.py runs N iterations of propose/measure/keep-or-revert.
+  # ============================================================================
+  autoresearch-loop:
+    needs: [setup, goal-design]
+    runs-on: ubuntu-latest
+    timeout-minutes: 240          # cap for many iterations × ~5min each
+    strategy:
+      fail-fast: false
+      max-parallel: ${{ fromJson(inputs.max-parallel-goals) }}
+      matrix:
+        goal: ${{ fromJson(needs.goal-design.outputs.goals-json) }}
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - uses: actions/download-artifact@v4
+        with:
+          name: goals
+          path: .autoresearch/goal-design/
+      - uses: ./
+        id: setup-action
+        with:
+          claude-oauth-token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
+          git-user-name: ${{ inputs.git-user-name }}
+          git-user-email: ${{ inputs.git-user-email }}
+
+      - name: Extract this goal's definition
+        env:
+          GOAL_ID: ${{ matrix.goal.id }}
+          RUN_ID: ${{ needs.setup.outputs.run-id }}
+        run: |
+          set -e
+          mkdir -p ".autoresearch/runs/$RUN_ID/$GOAL_ID"
+          python3 - <<'PY'
+          import json, os, sys
+          goal_id = os.environ["GOAL_ID"]
+          run_id = os.environ["RUN_ID"]
+          with open(".autoresearch/goal-design/goals.json") as f:
+              goals = json.load(f)
+          goal = next((g for g in goals if g["id"] == goal_id), None)
+          if goal is None:
+              print(f"error: goal {goal_id} not in goals.json", file=sys.stderr)
+              sys.exit(2)
+          out_path = f".autoresearch/runs/{run_id}/{goal_id}/goal.json"
+          with open(out_path, "w") as f:
+              json.dump(goal, f, indent=2)
+          print(f"wrote {out_path}")
+          PY
+
+      - name: Create experiment branch
+        env:
+          BRANCH: autoresearch/exp/${{ needs.setup.outputs.run-id }}/${{ matrix.goal.id }}
+        run: |
+          set -e
+          git fetch origin main
+          git branch "$BRANCH" origin/main
+          git push -u origin "$BRANCH"
+          git checkout "$BRANCH"
+          echo "Created and checked out $BRANCH"
+
+      - name: Run autoresearch loop
+        env:
+          RUN_ID: ${{ needs.setup.outputs.run-id }}
+          GOAL_ID: ${{ matrix.goal.id }}
+          BRANCH: autoresearch/exp/${{ needs.setup.outputs.run-id }}/${{ matrix.goal.id }}
+          GOAL_FILE: .autoresearch/runs/${{ needs.setup.outputs.run-id }}/${{ matrix.goal.id }}/goal.json
+          STATE_DIR: .autoresearch/runs/${{ needs.setup.outputs.run-id }}/${{ matrix.goal.id }}
+          MAX_ITERATIONS: ${{ inputs.max-iterations-per-goal }}
+          PLATEAU_K: ${{ inputs.plateau-k }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          CLAUDE_CMD: ${{ steps.setup-action.outputs.claude-path }}
+        run: |
+          python3 "$HOME/.claude/scripts/autoresearch_loop.py"
+
+      - name: Upload loop artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          include-hidden-files: true
+          name: loop-${{ matrix.goal.id }}
+          path: .autoresearch/runs/${{ needs.setup.outputs.run-id }}/${{ matrix.goal.id }}/
+          if-no-files-found: warn
+
+  # ============================================================================
+  # Stage 3: experiment-judge — holistic per-goal verdict on the experiment
+  # branch. Runs after each loop completes.
+  # ============================================================================
+  experiment-judge:
+    needs: [setup, goal-design, autoresearch-loop]
+    if: always() && needs.autoresearch-loop.result != 'skipped'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        goal: ${{ fromJson(needs.goal-design.outputs.goals-json) }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: autoresearch/exp/${{ needs.setup.outputs.run-id }}/${{ matrix.goal.id }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: loop-${{ matrix.goal.id }}
+          path: .autoresearch/runs/${{ needs.setup.outputs.run-id }}/${{ matrix.goal.id }}/
+      - uses: ./
+        id: setup-action
+        with:
+          claude-oauth-token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
+
+      - name: Stage judgment inputs
+        env:
+          GOAL_ID: ${{ matrix.goal.id }}
+          RUN_ID: ${{ needs.setup.outputs.run-id }}
+        run: |
+          set -e
+          STATE_DIR=".autoresearch/runs/$RUN_ID/$GOAL_ID"
+          JUDGE_DIR=".autoresearch/judgment"
+          mkdir -p "$JUDGE_DIR"
+          for f in goal.json iteration-log.jsonl best.json baseline.json session.md; do
+            if [ -f "$STATE_DIR/$f" ]; then
+              cp "$STATE_DIR/$f" "$JUDGE_DIR/$f"
+            fi
+          done
+
+      - name: Run experiment-judge
+        uses: anthropics/claude-code-base-action@beta
+        with:
+          prompt: |
+            You are the experiment-judge agent. The autoresearch loop for goal "${{ matrix.goal.id }}" has finished. The repository is checked out at the experiment branch HEAD.
+
+            Read inputs at .autoresearch/judgment/: goal.json, iteration-log.jsonl, best.json, baseline.json, session.md.
+            Read the actual code: `git diff main..HEAD` and `git log --oneline main..HEAD`.
+
+            Per agents/experiment-judge.md, write your holistic verdict to .autoresearch/judgment/holistic-verdict.json. No prose to stdout — the JSON file is the canonical output.
+          settings: |
+            {"agent":"experiment-judge","permissions":{"defaultMode":"bypassPermissions","skipDangerousModePermissionPrompt":true}}
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          path_to_claude_code_executable: ${{ steps.setup-action.outputs.claude-path }}
+          timeout_minutes: '20'
+
+      - name: Upload holistic verdict
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          include-hidden-files: true
+          name: verdict-${{ matrix.goal.id }}
+          path: .autoresearch/judgment/holistic-verdict.json
+          if-no-files-found: warn
+
+  # ============================================================================
+  # Stage 4: fold-in — open fold-in PRs for goals whose holistic verdict
+  # qualifies (configurable mode + minimum rating).
+  # ============================================================================
+  fold-in:
+    needs: [setup, goal-design, experiment-judge]
+    if: always() && needs.experiment-judge.result != 'skipped'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - uses: actions/download-artifact@v4
+        with:
+          path: .autoresearch/_artifacts/
+
+      - uses: ./
+        id: setup-action
+        with:
+          claude-oauth-token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
+
+      - name: Open fold-in PRs
+        env:
+          RUN_ID: ${{ needs.setup.outputs.run-id }}
+          FOLD_IN_MODE: ${{ inputs.fold-in-mode }}
+          FOLD_IN_RATING: ${{ inputs.fold-in-rating }}
+          ART_DIR: .autoresearch/_artifacts
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          python3 "$HOME/.claude/scripts/open_fold_in_prs.py"
+
+  # ============================================================================
+  # Stage 5: finish — assemble run report, publish to step summary, persist
+  # state to the autoresearch-state branch.
+  # ============================================================================
+  finish:
+    needs: [setup, goal-design, autoresearch-loop, experiment-judge, fold-in]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - uses: actions/download-artifact@v4
+        with:
+          path: .autoresearch/_artifacts/
+      - uses: ./
+        id: setup-action
+        with:
+          claude-oauth-token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
+
+      - name: Assemble report
+        env:
+          RUN_ID: ${{ needs.setup.outputs.run-id }}
+        run: |
+          set -e
+          python3 "$HOME/.claude/scripts/assemble_run_report.py" \
+            --artifacts-dir .autoresearch/_artifacts > /tmp/report.md
+          {
+            echo "## Autoresearch run report"
+            echo ""
+            cat /tmp/report.md
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Persist .autoresearch/ to state branch
+        if: always()
+        env:
+          GIT_USER_NAME: ${{ inputs.git-user-name }}
+          GIT_USER_EMAIL: ${{ inputs.git-user-email }}
+        run: |
+          set -e
+          # Snapshot just the cross-run-useful bits: memory, attempts log
+          mkdir -p /tmp/snapshot/.autoresearch
+          if [ -d .autoresearch/_artifacts/state/memory ]; then
+            cp -r .autoresearch/_artifacts/state/memory /tmp/snapshot/.autoresearch/
+          fi
+          if [ -f .autoresearch/_artifacts/state/attempts.jsonl ]; then
+            cp .autoresearch/_artifacts/state/attempts.jsonl /tmp/snapshot/.autoresearch/
+          fi
+          # TODO future: append this run's verdicts to attempts.jsonl
+
+          if [ -z "$(ls -A /tmp/snapshot/.autoresearch 2>/dev/null)" ]; then
+            echo "Nothing to persist"
+            exit 0
+          fi
+
+          WT=$(mktemp -d)
+          if git ls-remote --exit-code --heads origin "$STATE_BRANCH" >/dev/null 2>&1; then
+            git fetch --depth=1 origin "$STATE_BRANCH":"refs/autoresearch-state/incoming"
+            git worktree add "$WT" "refs/autoresearch-state/incoming"
+            rm -rf "$WT/.autoresearch"
+          else
+            git worktree add --detach "$WT"
+            ( cd "$WT" && git checkout --orphan "$STATE_BRANCH" && git rm -rf . >/dev/null 2>&1 || true )
+          fi
+          cp -r /tmp/snapshot/.autoresearch "$WT/"
+          (
+            cd "$WT"
+            git add -A .autoresearch
+            if git diff --cached --quiet; then
+              echo "No state changes to commit"
+              exit 0
+            fi
+            git -c user.name="$GIT_USER_NAME" -c user.email="$GIT_USER_EMAIL" \
+              commit -m "autoresearch state $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            git push -f origin "HEAD:$STATE_BRANCH"
+          )
+          git worktree remove --force "$WT" 2>/dev/null || true
