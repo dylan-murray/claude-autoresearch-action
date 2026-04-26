@@ -37,6 +37,11 @@ In your repo, copy this workflow to `.github/workflows/autoresearch.yml`:
 name: Autoresearch
 on:
   workflow_dispatch:
+    inputs:
+      goals:
+        description: 'Optional JSON array of explicit goals — leave blank to let the goal-designer pick.'
+        required: false
+        default: ''
   schedule: [{ cron: '0 9 * * 1' }]   # Mondays 09:00 UTC
 permissions:
   contents: write
@@ -49,8 +54,10 @@ jobs:
     with:
       max-iterations-per-goal: '10'
       goals-per-run: '2'
-      boldness: 'balanced'
+      goals: ${{ inputs.goals || '' }}
 ```
+
+Pass an explicit goal at dispatch time when you know exactly what you want optimized; leave it blank to let the `goal-designer` agent propose one against the repo. Goal JSON schema lives in `agents/goal-designer.md`.
 
 Add a repo secret named `CLAUDE_CODE_OAUTH_TOKEN` (from `claude setup-token`) **or** `ANTHROPIC_API_KEY`. `secrets: inherit` passes whichever you have.
 
@@ -63,7 +70,6 @@ Add a repo secret named `CLAUDE_CODE_OAUTH_TOKEN` (from `claude setup-token`) **
 | `plateau-k` | `'3'` | Halt the loop after K consecutive iterations with no `kept`. |
 | `max-parallel-goals` | `'2'` | Matrix max-parallel for goal cells. |
 | `goals` | `''` | Optional JSON array of explicit goals (skips goal-designer ideation). See `agents/goal-designer.md` for the schema. |
-| `boldness` | `'balanced'` | `conservative` \| `balanced` \| `bold` \| `experimental` |
 | `focus` | `''` | Comma-separated focus areas (e.g. `tests,security,docs`) |
 | `ignore` | `''` | Comma-separated glob patterns to ignore |
 | `git-user-name` | `'autoresearch-bot'` | Git author for commits |

@@ -15,7 +15,7 @@ If the workflow gave you explicit goals via the `goals` input, use those verbati
 - `repo-conventions.md` — concatenated `CLAUDE.md` / `AGENTS.md` / `.cursorrules` / `.windsurfrules`, whichever exist
 - `memory.md` — narrative memory from prior pipeline runs, restored from the state branch (may be empty on the first run)
 - `attempts.jsonl` — recent goals attempted across prior runs and how they fared (kept counts, holistic verdicts)
-- `config.json` — `{n_goals, boldness, focus, ignore_globs, scope_hint?}`
+- `config.json` — `{n_goals, focus, ignore_globs, scope_hint?}`
 - `explicit_goals.json` — if non-empty, the user-provided goals to pass through
 
 ## What makes a good autoresearch goal
@@ -77,9 +77,5 @@ Write `.autoresearch/goal-design/goals.json`:
 - **Don't propose more than `n_goals` goals** (from config). Quality > quantity.
 - **Don't propose a goal whose benchmark you can't write today.** "Improve UX" sounds nice but has no benchmark.
 - **Reuse `explicit_goals.json` as-is when provided** — your role becomes validation, not ideation.
-- **Honor `boldness`:**
-  - `conservative`: tight scopes, mechanical metrics (lint counts, type errors), strong guards
-  - `bold`: broader scopes, can include test-coverage push, refactoring metrics
-  - `experimental`: anything plausible — perf benchmarks, novel metrics, ambitious scopes. Still must have a working benchmark command.
 - **If memory + attempts say a goal recently failed, don't re-propose the same one.** Try an adjacent goal or a different angle.
 - **Print a 5-line summary** of the chosen goals to stdout for the workflow log.

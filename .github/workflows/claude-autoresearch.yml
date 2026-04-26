@@ -42,10 +42,6 @@ on:
         type: string
         default: ''
         description: 'Optional JSON array of explicit goals (skips goal-designer ideation). See agents/goal-designer.md for schema.'
-      boldness:
-        type: string
-        default: balanced
-        description: 'conservative | balanced | bold | experimental — guides goal-designer ambition.'
       focus:
         type: string
         default: ''
@@ -152,7 +148,6 @@ jobs:
       - name: Stage goal-designer inputs
         env:
           N_GOALS: ${{ inputs.goals-per-run }}
-          BOLDNESS: ${{ inputs.boldness }}
           FOCUS: ${{ inputs.focus }}
           IGNORE: ${{ inputs.ignore }}
           EXPLICIT_GOALS: ${{ inputs.goals }}
@@ -188,7 +183,6 @@ jobs:
           import json, os
           cfg = {
               "n_goals": int(os.environ.get("N_GOALS") or "1"),
-              "boldness": os.environ.get("BOLDNESS") or "balanced",
               "focus": [s.strip() for s in (os.environ.get("FOCUS") or "").split(",") if s.strip()],
               "ignore_globs": [s.strip() for s in (os.environ.get("IGNORE") or "").split(",") if s.strip()],
           }
