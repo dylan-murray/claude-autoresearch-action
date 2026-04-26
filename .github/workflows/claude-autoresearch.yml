@@ -100,6 +100,8 @@ jobs:
           echo "run_id=$RUN_ID"
 
       - name: Restore .autoresearch/ from state branch
+        env:
+          RUN_ID: ${{ steps.gen.outputs.run-id }}
         run: |
           set -e
           mkdir -p .autoresearch/memory
@@ -111,6 +113,9 @@ jobs:
           else
             echo "No state branch yet — starting cold"
           fi
+          # Guarantee the artifact is non-empty so downstream download-artifact
+          # never fails on first runs (cold start = no state branch = empty dir).
+          echo "$RUN_ID" > .autoresearch/run-id.txt
 
       - name: Upload state
         uses: actions/upload-artifact@v4
