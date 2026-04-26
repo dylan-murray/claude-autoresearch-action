@@ -142,7 +142,7 @@ jobs:
         with:
           name: state
           path: .autoresearch/
-      - uses: ./
+      - uses: dylan-murray/claude-autoresearch-action@main
         id: setup-action
         with:
           claude-oauth-token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
@@ -260,7 +260,7 @@ jobs:
         with:
           name: goals
           path: .autoresearch/goal-design/
-      - uses: ./
+      - uses: dylan-murray/claude-autoresearch-action@main
         id: setup-action
         with:
           claude-oauth-token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
@@ -349,7 +349,7 @@ jobs:
         with:
           name: loop-${{ matrix.goal.id }}
           path: .autoresearch/runs/${{ needs.setup.outputs.run-id }}/${{ matrix.goal.id }}/
-      - uses: ./
+      - uses: dylan-murray/claude-autoresearch-action@main
         id: setup-action
         with:
           claude-oauth-token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
@@ -413,7 +413,7 @@ jobs:
         with:
           path: .autoresearch/_artifacts/
 
-      - uses: ./
+      - uses: dylan-murray/claude-autoresearch-action@main
         id: setup-action
         with:
           claude-oauth-token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
@@ -442,7 +442,7 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           path: .autoresearch/_artifacts/
-      - uses: ./
+      - uses: dylan-murray/claude-autoresearch-action@main
         id: setup-action
         with:
           claude-oauth-token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
