@@ -8,7 +8,7 @@ name: Claude autoresearch
 #     autoresearch-loop  (N iterations of propose/measure/keep-or-revert)
 #       ↓
 #     experiment-judge   (holistic end-of-loop verdict)
-#   fold-in (open PRs for qualifying branches) → finish (publish report)
+#   open-prs (one PR per goal with kept commits) → finish (publish report)
 #
 # Consumers:
 #   jobs:
@@ -54,22 +54,25 @@ on:
         type: string
         default: ''
         description: 'Comma-separated glob patterns to ignore when designing goals.'
-      fold-in-mode:
-        type: string
-        default: all_above_threshold
-        description: 'all_above_threshold | best | none'
-      fold-in-rating:
-        type: string
-        default: 'mixed'
-        description: 'Minimum holistic rating to qualify for fold-in: mixed | net_positive'
       git-user-name:
         type: string
         default: 'autoresearch-bot'
       git-user-email:
         type: string
         default: 'autoresearch-bot@users.noreply.github.com'
+      loop-timeout-minutes:
+        type: string
+        default: '240'
+        description: 'Per-goal timeout (minutes) for the autoresearch-loop matrix job. Bump if your benchmark/iteration is slow or max-iterations-per-goal is high.'
     # No declared secrets — consumers use `secrets: inherit` and set
     # CLAUDE_CODE_OAUTH_TOKEN (subscription) or ANTHROPIC_API_KEY (API).
+
+# Serialize runs against the same caller repo. Two overlapping runs would
+# race on the autoresearch-state branch and corrupt cross-run memory.
+# cancel-in-progress=false → queue, don't cancel.
+concurrency:
+  group: claude-autoresearch-${{ github.repository }}
+  cancel-in-progress: false
 
 permissions:
   contents: write
@@ -245,7 +248,7 @@ jobs:
   autoresearch-loop:
     needs: [setup, goal-design]
     runs-on: ubuntu-latest
-    timeout-minutes: 240          # cap for many iterations × ~5min each
+    timeout-minutes: ${{ fromJson(inputs.loop-timeout-minutes) }}
     strategy:
       fail-fast: false
       max-parallel: ${{ fromJson(inputs.max-parallel-goals) }}
@@ -395,10 +398,11 @@ jobs:
           if-no-files-found: warn
 
   # ============================================================================
-  # Stage 4: fold-in — open fold-in PRs for goals whose holistic verdict
-  # qualifies (configurable mode + minimum rating).
+  # Stage 4: open-prs — one PR per goal that produced kept commits. PR body
+  # carries the holistic verdict + metric trajectory; whoever reviews decides
+  # whether to merge.
   # ============================================================================
-  fold-in:
+  open-prs:
     needs: [setup, goal-design, experiment-judge]
     if: always() && needs.experiment-judge.result != 'skipped'
     runs-on: ubuntu-latest
@@ -416,22 +420,20 @@ jobs:
           claude-oauth-token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
 
-      - name: Open fold-in PRs
+      - name: Open experiment PRs
         env:
           RUN_ID: ${{ needs.setup.outputs.run-id }}
-          FOLD_IN_MODE: ${{ inputs.fold-in-mode }}
-          FOLD_IN_RATING: ${{ inputs.fold-in-rating }}
-          ART_DIR: .autoresearch/_artifacts
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          python3 "$HOME/.claude/scripts/open_fold_in_prs.py"
+          python3 "$HOME/.claude/scripts/open_experiment_prs.py" \
+            --artifacts-dir .autoresearch/_artifacts
 
   # ============================================================================
   # Stage 5: finish — assemble run report, publish to step summary, persist
   # state to the autoresearch-state branch.
   # ============================================================================
   finish:
-    needs: [setup, goal-design, autoresearch-loop, experiment-judge, fold-in]
+    needs: [setup, goal-design, autoresearch-loop, experiment-judge, open-prs]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 15

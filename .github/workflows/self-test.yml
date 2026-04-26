@@ -33,8 +33,6 @@ jobs:
       goals-per-run: ${{ inputs.goals-per-run }}
       plateau-k: '2'
       max-parallel-goals: '1'
-      fold-in-mode: 'all_above_threshold'
-      fold-in-rating: 'mixed'
       goals: |
         [
           {

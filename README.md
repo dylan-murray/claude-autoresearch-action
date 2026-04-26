@@ -15,7 +15,7 @@ A reusable GitHub Action that runs **autoresearch-style optimization loops** aga
 
 After the loop, an opus-class agent (`experiment-judge`) reads the full diff and gives a **holistic verdict** — "is this branch worth merging?" — alongside the mechanical metric.
 
-If the verdict qualifies, a fold-in PR is opened against `main` for human review.
+For every goal that produced at least one kept commit, a PR is opened against `main` with the verdict + metric trajectory in the body. The human decides what to merge.
 
 ## What's different from karpathy/autoresearch
 
@@ -66,10 +66,9 @@ Add a repo secret named `CLAUDE_CODE_OAUTH_TOKEN` (from `claude setup-token`) **
 | `boldness` | `'balanced'` | `conservative` \| `balanced` \| `bold` \| `experimental` |
 | `focus` | `''` | Comma-separated focus areas (e.g. `tests,security,docs`) |
 | `ignore` | `''` | Comma-separated glob patterns to ignore |
-| `fold-in-mode` | `'all_above_threshold'` | `all_above_threshold` \| `best` \| `none` |
-| `fold-in-rating` | `'mixed'` | Minimum holistic rating to qualify: `mixed` or `net_positive` |
 | `git-user-name` | `'autoresearch-bot'` | Git author for commits |
 | `git-user-email` | `'autoresearch-bot@users.noreply.github.com'` | |
+| `loop-timeout-minutes` | `'240'` | Per-goal timeout for the autoresearch-loop job. Bump if iterations are slow or `max-iterations-per-goal` is high. |
 
 ## Architecture
 
@@ -94,7 +93,7 @@ setup
   │    Returns holistic verdict          │
   └─────────────────────────────────────┘
        ↓
-  fold-in (open PRs for qualifying goals)
+  open-prs (one PR per goal with kept commits)
        ↓
   finish (publish report to step summary, persist state)
 ```
@@ -109,10 +108,10 @@ The mechanical loop (in `scripts/autoresearch_loop.py`) is the core; everything 
 
 ## What gets opened on your repo
 
-Per goal, sigil-autoresearch creates:
+Per goal, the action creates:
 
 - A branch `autoresearch/exp/<run-id>/<goal-id>` with the kept commits from the loop
-- (If the goal qualifies) A fold-in PR against `main` with the holistic verdict in the body
+- A PR against `main` with the holistic verdict + metric trajectory + iteration log in the body (skipped if the loop produced zero kept commits)
 
 It also persists narrative state to a `autoresearch-state` branch so future runs accumulate context.
 
