@@ -10,7 +10,7 @@ inputs:
     description: 'Pi provider id. Anything Pi supports — ollama, anthropic, openai, google, groq, mistral, openrouter, xai, cerebras, deepseek, etc.'
     required: true
   pi-model:
-    description: 'Pi model id (e.g. gpt-oss:120b-cloud, anthropic/claude-sonnet-4-6, openrouter/google/gemini-2.0-flash).'
+    description: 'Pi model id for the chosen provider. Run `pi --list-models` locally to discover valid ids.'
     required: true
   goal:
     description: 'Goal description fed to /skill:autoresearch-create. Leave empty for auto-goal mode (Pi picks the metric itself).'
@@ -270,6 +270,7 @@ runs:
       env:
         BRANCH: ${{ steps.harvest.outputs.branch }}
         BASE: ${{ inputs.base-branch }}
+        EXPERIMENT_DIR: ${{ steps.gen.outputs.experiment-dir }}
         GOAL: ${{ inputs.goal }}
         PROVIDER: ${{ inputs.pi-provider }}
         MODEL: ${{ inputs.pi-model }}
@@ -278,10 +279,12 @@ runs:
         GH_TOKEN: ${{ github.token }}
       run: |
         set -e
+        # autoresearch.md was relocated to $EXPERIMENT_DIR by the prior step.
+        SESSION_MD="$EXPERIMENT_DIR/autoresearch.md"
         # In auto-goal mode, infer a title from autoresearch.md's first heading.
         if [ -z "$GOAL" ]; then
-          if [ -f autoresearch.md ]; then
-            GOAL=$(awk '/^# / {sub(/^# */, ""); print; exit}' autoresearch.md)
+          if [ -f "$SESSION_MD" ]; then
+            GOAL=$(awk '/^# / {sub(/^# */, ""); print; exit}' "$SESSION_MD")
           fi
           : "${GOAL:=auto-goal experiment}"
           GOAL_LABEL="**Goal (auto-chosen):** $GOAL"
@@ -309,11 +312,11 @@ runs:
           echo
           echo "### Session"
           echo
-          if [ -f autoresearch.md ]; then
+          if [ -f "$SESSION_MD" ]; then
             echo '<details><summary>autoresearch.md</summary>'
             echo
             echo '```markdown'
-            cat autoresearch.md
+            cat "$SESSION_MD"
             echo
             echo '```'
             echo '</details>'

@@ -22,7 +22,7 @@ workflow writes before invoking us).
 
 Inputs (env vars):
   PI_PROVIDER       provider id passed to `pi --provider` (e.g. "ollama")
-  PI_MODEL          model id passed to `pi --model` (e.g. "gpt-oss:120b-cloud")
+  PI_MODEL          model id passed to `pi --model` (e.g. "kimi-k2.6:cloud")
   GOAL_TEXT         the goal description. Empty string → auto-goal mode:
                     pi-autoresearch picks its own metric based on the repo.
   AUTO_GOAL_FOCUS   auto-mode only — comma-sep focus areas (tests, perf, ...)
@@ -30,6 +30,9 @@ Inputs (env vars):
   TIMEOUT_SECONDS   wall-clock backstop (default 3600)
   PI_BIN            path to pi binary (default "pi")
   EVENT_LOG         path to write JSONL event log (default ./pi-events.jsonl)
+  STREAM_EVENTS     "true" to print a one-liner per pi event to stdout
+                    (off by default — event content can include file
+                    bodies / tool args, world-readable on public repos)
 
 Exit codes:
   0   loop completed (cap hit OR timeout backstop fired)
