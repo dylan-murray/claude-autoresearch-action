@@ -1,19 +1,33 @@
-name: 'Claude autoresearch — setup'
-description: 'Install Claude Code, claude-autoresearch-action agents, and the loop scripts. Used as a step in each job of claude-autoresearch.yml.'
+name: 'Pi autoresearch — setup'
+description: 'Install pi-coding-agent, the pi-autoresearch extension, ollama (if requested), and the RPC driver. Used as a step in pi-autoresearch.yml.'
 author: 'Dylan Murray'
 branding:
   icon: 'rotate-ccw'
   color: 'purple'
 
 inputs:
-  claude-oauth-token:
-    description: 'Long-lived Claude Code OAuth token (subscription auth). Generate with `claude setup-token`. Provide this OR `anthropic-api-key`.'
+  pi-provider:
+    description: 'Pi provider id (e.g. `ollama`, `anthropic`, `openai`). Determines which secret pi expects in env.'
+    required: true
+  pi-model:
+    description: 'Pi model id (e.g. `gpt-oss:120b-cloud`, `anthropic/claude-sonnet-4-6`).'
+    required: true
+  ollama-api-key:
+    description: 'Ollama Cloud API key. Required iff `pi-provider` is `ollama`.'
     required: false
     default: ''
   anthropic-api-key:
-    description: 'Anthropic API key. Provide this OR `claude-oauth-token`.'
+    description: 'Anthropic API key. Required iff `pi-provider` is `anthropic`.'
     required: false
     default: ''
+  openai-api-key:
+    description: 'OpenAI API key. Required iff `pi-provider` is `openai`.'
+    required: false
+    default: ''
+  pi-autoresearch-ref:
+    description: 'GitHub URL or git ref for the pi-autoresearch extension to install.'
+    required: false
+    default: 'https://github.com/davebcn87/pi-autoresearch'
   git-user-name:
     description: 'Git author name for autoresearch commits.'
     required: false
@@ -23,58 +37,89 @@ inputs:
     required: false
     default: 'autoresearch-bot@users.noreply.github.com'
 
-outputs:
-  claude-path:
-    description: 'Absolute path to the installed claude binary.'
-    value: ${{ steps.install-claude.outputs.claude-path }}
-
 runs:
   using: composite
   steps:
-    - name: Verify credentials
+    - name: Verify provider credentials
       shell: bash
       env:
-        OAUTH_TOKEN: ${{ inputs.claude-oauth-token }}
-        API_KEY: ${{ inputs.anthropic-api-key }}
+        PROVIDER: ${{ inputs.pi-provider }}
+        OLLAMA_KEY: ${{ inputs.ollama-api-key }}
+        ANTHROPIC_KEY: ${{ inputs.anthropic-api-key }}
+        OPENAI_KEY: ${{ inputs.openai-api-key }}
       run: |
         set -e
-        if [ -z "$OAUTH_TOKEN" ] && [ -z "$API_KEY" ]; then
-          echo "::error::Provide either \`claude-oauth-token\` (subscription auth) or \`anthropic-api-key\` (API auth)."
-          exit 1
-        fi
+        case "$PROVIDER" in
+          ollama)
+            [ -n "$OLLAMA_KEY" ] || { echo "::error::pi-provider=ollama requires ollama-api-key"; exit 1; }
+            ;;
+          anthropic)
+            [ -n "$ANTHROPIC_KEY" ] || { echo "::error::pi-provider=anthropic requires anthropic-api-key"; exit 1; }
+            ;;
+          openai)
+            [ -n "$OPENAI_KEY" ] || { echo "::error::pi-provider=openai requires openai-api-key"; exit 1; }
+            ;;
+          *)
+            echo "::error::Unsupported pi-provider: $PROVIDER (supported: ollama, anthropic, openai)"
+            exit 1
+            ;;
+        esac
+        echo "provider=$PROVIDER ok"
 
     - name: Setup Node.js
       uses: actions/setup-node@v4
       with:
         node-version: '20'
 
-    - name: Install latest Claude Code
-      id: install-claude
+    - name: Install pi-coding-agent
       shell: bash
       run: |
         set -e
-        npm install -g @anthropic-ai/claude-code@latest
-        CLAUDE_PATH="$(which claude)"
-        echo "claude path: $CLAUDE_PATH"
-        claude --version
-        echo "claude-path=$CLAUDE_PATH" >> "$GITHUB_OUTPUT"
+        npm install -g @mariozechner/pi-coding-agent
+        pi --version
 
-    - name: Install agents and scripts
+    - name: Install ollama (provider=ollama)
+      if: inputs.pi-provider == 'ollama'
+      shell: bash
+      env:
+        OLLAMA_API_KEY: ${{ inputs.ollama-api-key }}
+      run: |
+        set -e
+        curl -fsSL https://ollama.com/install.sh | sh
+        ollama --version
+        # Make the key available to subsequent steps without re-passing
+        echo "OLLAMA_API_KEY=$OLLAMA_API_KEY" >> "$GITHUB_ENV"
+
+    - name: Export provider keys to subsequent steps
+      shell: bash
+      env:
+        ANTHROPIC_KEY: ${{ inputs.anthropic-api-key }}
+        OPENAI_KEY: ${{ inputs.openai-api-key }}
+      run: |
+        set -e
+        if [ -n "$ANTHROPIC_KEY" ]; then echo "ANTHROPIC_API_KEY=$ANTHROPIC_KEY" >> "$GITHUB_ENV"; fi
+        if [ -n "$OPENAI_KEY" ]; then echo "OPENAI_API_KEY=$OPENAI_KEY" >> "$GITHUB_ENV"; fi
+
+    - name: Install pi-autoresearch extension
+      shell: bash
+      env:
+        PI_AUTORESEARCH_REF: ${{ inputs.pi-autoresearch-ref }}
+      run: |
+        set -e
+        pi install "$PI_AUTORESEARCH_REF"
+        echo "Installed pi-autoresearch extension."
+
+    - name: Install RPC driver + helper scripts
       shell: bash
       env:
         ACTION_PATH: ${{ github.action_path }}
       run: |
         set -e
-        mkdir -p "$HOME/.claude/agents"
-        cp "$ACTION_PATH/agents/"*.md "$HOME/.claude/agents/"
-        echo "Installed agents at $HOME/.claude/agents/:"
-        ls "$HOME/.claude/agents/"
-
-        mkdir -p "$HOME/.claude/scripts"
-        cp "$ACTION_PATH/scripts/"*.py "$HOME/.claude/scripts/"
-        chmod +x "$HOME/.claude/scripts/"*.py
-        echo "Installed scripts at $HOME/.claude/scripts/:"
-        ls "$HOME/.claude/scripts/"
+        mkdir -p "$HOME/.pi-autoresearch/scripts"
+        cp "$ACTION_PATH/scripts/"*.py "$HOME/.pi-autoresearch/scripts/"
+        chmod +x "$HOME/.pi-autoresearch/scripts/"*.py
+        echo "Installed scripts at $HOME/.pi-autoresearch/scripts/:"
+        ls "$HOME/.pi-autoresearch/scripts/"
 
     - name: Configure git
       shell: bash
