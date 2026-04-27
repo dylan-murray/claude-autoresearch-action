@@ -1,7 +1,11 @@
 name: Self-test (smoke)
 
-# Manual smoke test that calls the composite action against fixtures/todo-corpus/.
-# Validates the install + RPC plumbing end-to-end without burning much spend.
+# Manual smoke test that calls the composite action against the repo.
+# Validates the install + RPC plumbing end-to-end.
+#
+# Two modes via the `auto-goal` toggle:
+#   false (default): explicit TODO-removal goal targeting fixtures/todo-corpus/
+#   true: empty goal — pi picks its own metric by exploring the repo
 #
 # Push does NOT trigger this; otherwise pushing the workflow file would
 # loop the action.
@@ -22,11 +26,22 @@ on:
         description: 'maxIterations (default 3 for smoke)'
         type: string
         default: '3'
+      auto-goal:
+        description: 'Let pi pick its own metric (free mode). Ignores the fixture goal.'
+        type: boolean
+        default: false
 
 permissions:
   contents: write
   pull-requests: write
   issues: write
+
+env:
+  # Provider keys for the action — set whichever you have as secrets;
+  # pi reads only the one matching `pi-provider`.
+  OLLAMA_API_KEY: ${{ secrets.OLLAMA_API_KEY }}
+  ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+  OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
 
 jobs:
   smoke:
@@ -35,7 +50,20 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with: { fetch-depth: 0 }
-      - uses: ./
+
+      - name: Run pi-autoresearch (auto-goal mode)
+        if: inputs.auto-goal
+        uses: ./
+        with:
+          pi-provider: ${{ inputs.pi-provider }}
+          pi-model: ${{ inputs.pi-model }}
+          max-iterations: ${{ inputs.max-iterations }}
+          driver-timeout-seconds: '1500'
+          goal: ''
+
+      - name: Run pi-autoresearch (explicit goal — TODO fixture)
+        if: '!inputs.auto-goal'
+        uses: ./
         with:
           pi-provider: ${{ inputs.pi-provider }}
           pi-model: ${{ inputs.pi-model }}
@@ -55,9 +83,3 @@ jobs:
 
             Files in scope: fixtures/todo-corpus/**.
             Do not modify any file outside that directory.
-        env:
-          # Add whichever provider keys you have set as secrets. Pi reads
-          # only the one matching `pi-provider`; the rest are ignored.
-          OLLAMA_API_KEY: ${{ secrets.OLLAMA_API_KEY }}
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
