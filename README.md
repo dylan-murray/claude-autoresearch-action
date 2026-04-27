@@ -1,19 +1,10 @@
 # pi-autoresearch-action 🔬
 
-Run [pi-autoresearch](https://github.com/davebcn87/pi-autoresearch) — autonomous experiment loops via the [Pi coding agent](https://pi.dev) — as a GitHub Action. Bring any LLM (ollama, anthropic, openai); pi-autoresearch owns the loop, we just plumb it.
+Run [pi-autoresearch](https://github.com/davebcn87/pi-autoresearch) — autonomous experiment loops via the [Pi coding agent](https://pi.dev) — as a GitHub Action. Bring any LLM Pi supports; pi-autoresearch owns the loop, we just plumb it.
 
-## ⚙️ What this is
+## ⚙️ How it works
 
-A reusable GitHub workflow that:
-
-1. Installs Pi (`@mariozechner/pi-coding-agent`) and the `pi-autoresearch` extension on the runner
-2. Optionally installs ollama (when `pi-provider: ollama`)
-3. Spawns `pi --mode rpc --provider X --model Y`
-4. Sends a single kickoff message — `/skill:autoresearch-create` plus your goal
-5. pi-autoresearch handles the entire loop: try → measure → keep or revert → repeat, capped by `maxIterations`
-6. When the cap is hit (or the wall-clock backstop fires), pushes the experiment branch and opens a PR with the session log in the body
-
-The whole loop lives inside Pi's runtime. This action is a thin, reusable wrapper.
+The action installs Pi (`@mariozechner/pi-coding-agent`) and the `pi-autoresearch` extension on the runner, spawns Pi in RPC mode, and sends a single kickoff that invokes `/skill:autoresearch-create` with your goal (or empty for auto-goal mode). pi-autoresearch then runs the loop — try → measure → keep or revert → repeat — capped by `maxIterations`. When the cap hits (or our wall-clock backstop fires), the action pushes pi's experiment branch and opens a PR with the session log in the body. The whole loop lives inside Pi's runtime; this action is a thin reusable wrapper.
 
 ## 🚀 Quickstart
 
@@ -57,7 +48,7 @@ Provider keys flow via `env:` on the step — Pi reads its provider's standard e
 | `ollama` | `OLLAMA_API_KEY` |
 | `anthropic` | `ANTHROPIC_API_KEY` |
 | `openai` | `OPENAI_API_KEY` |
-| `google` | `GOOGLE_API_KEY` |
+| `google` | `GEMINI_API_KEY` |
 | `groq` | `GROQ_API_KEY` |
 | `mistral` | `MISTRAL_API_KEY` |
 | `openrouter` | `OPENROUTER_API_KEY` |
@@ -77,7 +68,7 @@ Bedrock and Azure aren't wired here yet (they need OIDC / IAM setup).
 | Input | Default | Notes |
 |---|---|---|
 | `pi-provider` | *(required)* | Anything Pi supports — `ollama`, `anthropic`, `openai`, `google`, `groq`, `mistral`, `openrouter`, `xai`, `cerebras`, `deepseek`, etc. |
-| `pi-model` | *(required)* | Model id (e.g. `kimi-k2.6:cloud`, `anthropic/claude-sonnet-4-6`, `openrouter/google/gemini-2.0-flash`) |
+| `pi-model` | *(required)* | Model id Pi accepts for the chosen provider (run `pi --list-models` locally to discover). |
 | `goal` | `''` | Goal text. Empty → auto-goal mode. |
 | `focus` | `''` | Auto-goal only: comma-sep focus areas (`tests,perf,docs`) |
 | `ignore` | `''` | Auto-goal only: comma-sep glob patterns to avoid |
@@ -99,28 +90,11 @@ Bedrock and Azure aren't wired here yet (they need OIDC / IAM setup).
 | `kept-commits` | Number of commits the loop kept |
 | `pr-url` | PR URL if one was opened |
 
-## 🔧 What the action does
-
-```
-install pi + pi-autoresearch extension
-install ollama (if provider=ollama)
-create experiment branch from base
-write autoresearch.config.json (with maxIterations)
-spawn `pi --mode rpc --provider X --model Y`
-scripts/pi_rpc_driver.py:
-  • send /skill:autoresearch-create with goal (or auto-goal kickoff)
-  • stream JSONL events to pi-events.jsonl
-  • poll get_state every 30s, exit when idle for 2 consecutive checks
-  • abort + exit on wall-clock timeout
-push experiment branch
-open PR (if any commits kept and open-pr: true)
-upload run artifacts
-```
-
 ## 📦 What gets opened on your repo
 
 Per run:
-- A branch `autoresearch/exp/<run-id>` with whatever pi-autoresearch kept
+- A branch `autoresearch/<goal-slug>-<date>` (created by pi-autoresearch) with whatever the loop kept
+- The session files (`autoresearch.md`, `.sh`, `.checks.sh`, `.jsonl`, `.config.json`) live in `.autoresearch/exp/<run-id>/` — `.gitignore .autoresearch/` to keep them out of merges
 - A PR against `main` with the goal, provider/model, and `autoresearch.md` session log in the body — only if at least one commit landed
 
 ## 💸 Cost and rate limits
