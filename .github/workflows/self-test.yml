@@ -1,7 +1,8 @@
 name: Self-test (smoke)
 
-# Manual smoke test that calls the composite action against this repo in
-# auto-goal mode — pi explores the repo and picks its own metric.
+# Manual smoke test that calls the composite action against this repo.
+# Default is auto-goal mode (pi picks its own metric); fill the `goal`
+# input on dispatch to run with an explicit goal instead.
 #
 # Push does NOT trigger this; otherwise pushing the workflow file would
 # loop the action.
@@ -18,6 +19,10 @@ on:
         description: 'Pi model'
         type: string
         default: 'kimi-k2.6:cloud'
+      goal:
+        description: 'Goal — leave blank for auto-goal (free idea) mode where pi picks its own metric.'
+        type: string
+        default: ''
       max-iterations:
         description: 'maxIterations (default 3 for smoke)'
         type: string
@@ -45,8 +50,8 @@ jobs:
           pi-model: ${{ inputs.pi-model }}
           max-iterations: ${{ inputs.max-iterations }}
           driver-timeout-seconds: '1500'
-          # Empty goal → auto-goal mode (pi picks its own metric).
-          goal: ''
+          # Empty goal → auto-goal (free idea) mode.
+          goal: ${{ inputs.goal }}
           stream-events: ${{ inputs.stream-events }}
         env:
           # Add whichever provider keys you have set as secrets. Pi reads
