@@ -216,27 +216,37 @@ runs:
         )
         moved=0
         mkdir -p "$EXPERIMENT_DIR"
-        for f in "${SESSION_FILES[@]}"; do
-          if [ -e "$f" ]; then
-            git mv "$f" "$EXPERIMENT_DIR/$f"
-            moved=$((moved+1))
+        # Move tracked files via `git mv` (preserves history); untracked ones
+        # via plain `mv` (the action wrote autoresearch.config.json itself
+        # before pi ran, and pi's log_experiment may not have staged it if
+        # the loop never iterated). The trailing commit guard handles both.
+        relocate() {
+          local src="$1" dst="$2"
+          if git ls-files --error-unmatch "$src" >/dev/null 2>&1; then
+            git mv "$src" "$dst"
+          else
+            mv "$src" "$dst"
           fi
-        done
-        # autoresearch.hooks/ if it exists
-        if [ -d autoresearch.hooks ]; then
-          git mv autoresearch.hooks "$EXPERIMENT_DIR/autoresearch.hooks"
           moved=$((moved+1))
+        }
+        for f in "${SESSION_FILES[@]}"; do
+          [ -e "$f" ] && relocate "$f" "$EXPERIMENT_DIR/$f"
+        done
+        if [ -d autoresearch.hooks ]; then
+          relocate autoresearch.hooks "$EXPERIMENT_DIR/autoresearch.hooks"
         fi
         if [ "$moved" -eq 0 ]; then
           echo "No session files at repo root to relocate."
           exit 0
         fi
-        # Only commit if we're on a branch that has commits (pi created one).
-        # If HEAD is still on the base branch, the loop never ran — leave
-        # the moves uncommitted; harvest will detect the no-op and skip.
+        # Only commit if anything's actually staged. If pi never iterated,
+        # all moves were of untracked files → no staged changes → no commit;
+        # harvest's "still on base branch" check will then report 0 kept.
         if [ -n "$(git diff --cached --name-only)" ]; then
           git commit -m "chore(autoresearch): relocate session files to $EXPERIMENT_DIR"
           echo "Relocated $moved session entries; committed."
+        else
+          echo "Relocated $moved session entries (none tracked, nothing to commit)."
         fi
 
     - name: Harvest results
