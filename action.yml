@@ -53,11 +53,11 @@ inputs:
 
 outputs:
   run-id:
-    description: 'Generated run id (used in the experiment branch name).'
+    description: 'Generated run id (used in step summaries / artifacts).'
     value: ${{ steps.gen.outputs.run-id }}
   branch:
-    description: 'Experiment branch name (autoresearch/exp/<run-id>).'
-    value: ${{ steps.gen.outputs.branch }}
+    description: 'Experiment branch name (created by pi-autoresearch as `autoresearch/<goal-slug>-<date>`).'
+    value: ${{ steps.harvest.outputs.branch }}
   kept-commits:
     description: 'Number of commits the loop kept on the experiment branch.'
     value: ${{ steps.harvest.outputs.kept-commits }}
@@ -135,29 +135,22 @@ runs:
         git config --global user.email "$GIT_USER_EMAIL"
         git config --global init.defaultBranch main
 
-    - name: Generate run-id and branch
+    - name: Generate run-id
       id: gen
       shell: bash
-      run: |
-        set -e
-        RUN_ID="$(date -u +%Y%m%d-%H%M%S)-$(openssl rand -hex 3)"
-        BRANCH="autoresearch/exp/${RUN_ID}"
-        echo "run-id=$RUN_ID" >> "$GITHUB_OUTPUT"
-        echo "branch=$BRANCH" >> "$GITHUB_OUTPUT"
-        echo "run_id=$RUN_ID branch=$BRANCH"
-
-    - name: Create experiment branch
-      shell: bash
       env:
-        BRANCH: ${{ steps.gen.outputs.branch }}
         BASE: ${{ inputs.base-branch }}
       run: |
         set -e
+        RUN_ID="$(date -u +%Y%m%d-%H%M%S)-$(openssl rand -hex 3)"
+        echo "run-id=$RUN_ID" >> "$GITHUB_OUTPUT"
+        echo "run_id=$RUN_ID"
+        # pi-autoresearch's autoresearch-create skill does
+        # `git checkout -b autoresearch/<goal>-<date>` itself, so we don't
+        # pre-create a branch — we just sit on $BASE and let pi spin its own.
+        # Make sure we're on the base branch when it's invoked.
         git fetch origin "$BASE"
-        git branch "$BRANCH" "origin/$BASE"
-        git push -u origin "$BRANCH"
-        git checkout "$BRANCH"
-        echo "Checked out $BRANCH (from origin/$BASE)"
+        git checkout "$BASE" 2>/dev/null || git checkout -b "$BASE" "origin/$BASE"
 
     - name: Write autoresearch.config.json
       shell: bash
@@ -195,21 +188,32 @@ runs:
       id: harvest
       shell: bash
       env:
-        BRANCH: ${{ steps.gen.outputs.branch }}
         BASE: ${{ inputs.base-branch }}
       run: |
         set -e
-        git push origin "$BRANCH"
+        # pi-autoresearch's skill ran `git checkout -b autoresearch/<goal>-<date>`
+        # itself. Capture whatever branch HEAD is on now — that's pi's branch.
+        # If the loop never ran (driver crashed, no commits), HEAD is still on
+        # $BASE; we report 0 kept and skip the push.
+        BRANCH=$(git rev-parse --abbrev-ref HEAD)
+        if [ "$BRANCH" = "$BASE" ]; then
+          echo "::warning::HEAD is still on $BASE — pi-autoresearch didn't create a branch."
+          echo "branch=" >> "$GITHUB_OUTPUT"
+          echo "kept-commits=0" >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+        git push -u origin "$BRANCH"
         KEPT=$(git rev-list --count "origin/$BASE..$BRANCH")
+        echo "branch=$BRANCH" >> "$GITHUB_OUTPUT"
         echo "kept-commits=$KEPT" >> "$GITHUB_OUTPUT"
-        echo "kept commits on $BRANCH: $KEPT"
+        echo "kept $KEPT commits on $BRANCH"
 
     - name: Open PR
       id: open-pr
       if: inputs.open-pr == 'true' && steps.harvest.outputs.kept-commits != '0'
       shell: bash
       env:
-        BRANCH: ${{ steps.gen.outputs.branch }}
+        BRANCH: ${{ steps.harvest.outputs.branch }}
         BASE: ${{ inputs.base-branch }}
         GOAL: ${{ inputs.goal }}
         PROVIDER: ${{ inputs.pi-provider }}
@@ -277,7 +281,7 @@ runs:
       shell: bash
       env:
         RUN_ID: ${{ steps.gen.outputs.run-id }}
-        BRANCH: ${{ steps.gen.outputs.branch }}
+        BRANCH: ${{ steps.harvest.outputs.branch }}
         KEPT: ${{ steps.harvest.outputs.kept-commits }}
         PR_URL: ${{ steps.open-pr.outputs.pr-url }}
       run: |
