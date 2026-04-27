@@ -1,33 +1,25 @@
-# claude-autoresearch-action
+# pi-autoresearch-action
 
-> Run an autoresearch optimization loop on your repo as a GitHub Action. Goal-driven, metric-validated, holistic-judged. Inspired by [karpathy/autoresearch](https://github.com/karpathy/autoresearch).
+> Run [pi-autoresearch](https://github.com/davebcn87/pi-autoresearch) — autonomous experiment loops via the [Pi coding agent](https://pi.dev) — as a GitHub Action. Bring any LLM (ollama, anthropic, openai); pi-autoresearch owns the loop, we just plumb it.
 
 ## What this is
 
-A reusable GitHub Action that runs **autoresearch-style optimization loops** against your repo. The loop:
+A reusable GitHub workflow that:
 
-1. Picks ONE focused change to try (Claude agent: `iteration-runner`)
-2. Commits it on an experiment branch
-3. Runs your benchmark command, parses `METRIC name=value`
-4. Runs your guard command (must exit 0)
-5. **Keeps** the commit if the metric moved in the right direction; **`git revert`s** otherwise
-6. Repeats until iteration cap or plateau
+1. Installs Pi (`@mariozechner/pi-coding-agent`) and the `pi-autoresearch` extension on the runner
+2. Optionally installs ollama (when `pi-provider: ollama`)
+3. Spawns `pi --mode rpc --provider X --model Y`
+4. Sends a single kickoff message — `/skill:autoresearch-create` plus your goal
+5. pi-autoresearch handles the entire loop: try → measure → keep or revert → repeat, capped by `maxIterations`
+6. When the cap is hit (or the wall-clock backstop fires), pushes the experiment branch and opens a PR with the session log in the body
 
-After the loop, an opus-class agent (`experiment-judge`) reads the full diff and gives a **holistic verdict** — "is this branch worth merging?" — alongside the mechanical metric.
+The whole loop lives inside Pi's runtime. This action is a thin, reusable wrapper.
 
-For every goal that produced at least one kept commit, a PR is opened against `main` with the verdict + metric trajectory in the body. The human decides what to merge.
+## Why use this vs. a Claude-only autoresearch action
 
-## What's different from karpathy/autoresearch
-
-| | karpathy/autoresearch | claude-autoresearch-action |
-|---|---|---|
-| Input model | One goal + benchmark | One or N goals + benchmarks (auto-designed or explicit) |
-| Execution | Single CLI loop | Parallel matrix (one optimization per goal) |
-| Halt conditions | User interrupt | Iteration cap + plateau detection |
-| End-of-run review | Metric only | Mechanical metric **+** opus holistic verdict |
-| Guard mechanism | None | Optional command that must pass per iteration |
-| Cross-run memory | None | State branch persists narrative + attempts log |
-| Distribution | Local CLI | GitHub Action |
+- **Bring your own model.** Pi has first-class support for 15+ providers (ollama, anthropic, openai, google, azure, bedrock, mistral, groq, …). Pick a cheap ollama-cloud model for iteration, a stronger model for judgment, swap mid-experiment.
+- **No permission gates.** Pi runs with the user's full host permissions out of the box — no `--dangerously-skip-permissions` flags, no permission prompts to script around in CI.
+- **The loop is someone else's problem.** pi-autoresearch is a polished extension with a dashboard, hooks, finalize skill, etc. We don't reimplement any of that.
 
 ## Quickstart
 
@@ -38,101 +30,110 @@ name: Autoresearch
 on:
   workflow_dispatch:
     inputs:
-      goals:
-        description: 'Optional JSON array of explicit goals — leave blank to let the goal-designer pick.'
+      goal:
+        description: 'What to optimize. Leave blank for auto-goal mode.'
         required: false
         default: ''
-  schedule: [{ cron: '0 9 * * 1' }]   # Mondays 09:00 UTC
 permissions:
   contents: write
   pull-requests: write
-  issues: write
 jobs:
   autoresearch:
-    uses: dylan-murray/claude-autoresearch-action/.github/workflows/claude-autoresearch.yml@main
-    secrets: inherit
-    with:
-      max-iterations-per-goal: '10'
-      goals-per-run: '2'
-      goals: ${{ inputs.goals || '' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - uses: dylan-murray/pi-autoresearch-action@main
+        with:
+          pi-provider: 'ollama'
+          pi-model: 'kimi-k2.6:cloud'
+          goal: ${{ inputs.goal }}
+          max-iterations: '10'
+        env:
+          OLLAMA_API_KEY: ${{ secrets.OLLAMA_API_KEY }}
 ```
 
-Pass an explicit goal at dispatch time when you know exactly what you want optimized; leave it blank to let the `goal-designer` agent propose one against the repo. Goal JSON schema lives in `agents/goal-designer.md`.
+Provider keys flow via `env:` on the step — Pi reads its provider's standard env var directly. Set whichever matches your `pi-provider`:
 
-Add a repo secret named `CLAUDE_CODE_OAUTH_TOKEN` (from `claude setup-token`) **or** `ANTHROPIC_API_KEY`. `secrets: inherit` passes whichever you have.
+| Provider | Env var |
+|---|---|
+| `ollama` | `OLLAMA_API_KEY` |
+| `anthropic` | `ANTHROPIC_API_KEY` |
+| `openai` | `OPENAI_API_KEY` |
+| `google` | `GOOGLE_API_KEY` |
+| `groq` | `GROQ_API_KEY` |
+| `mistral` | `MISTRAL_API_KEY` |
+| `openrouter` | `OPENROUTER_API_KEY` |
+| `xai` | `XAI_API_KEY` |
+| `cerebras` | `CEREBRAS_API_KEY` |
+| `deepseek` | `DEEPSEEK_API_KEY` |
 
-## Reusable workflow inputs
+Bedrock and Azure aren't wired here yet (they need OIDC / IAM setup).
+
+### Two modes
+
+- **Auto-goal** (`goal: ''` or omitted): the agent scans the repo and picks a meaningful metric on its own. Optionally steer with `focus: 'tests,perf'` and `ignore: 'vendor/**,node_modules/**'`.
+- **Explicit goal** (`goal: '...'`): you describe what to optimize, the metric command, and the backpressure check. More predictable; use when you know what you want.
+
+## Inputs
 
 | Input | Default | Notes |
 |---|---|---|
-| `goals-per-run` | `'1'` | How many distinct goals the goal-designer should propose. Each becomes a parallel matrix cell. |
-| `max-iterations-per-goal` | `'10'` | Iteration cap per goal. Each iteration is one propose/measure/keep-or-revert step. |
-| `plateau-k` | `'3'` | Halt the loop after K consecutive iterations with no `kept`. |
-| `max-parallel-goals` | `'2'` | Matrix max-parallel for goal cells. |
-| `goals` | `''` | Optional JSON array of explicit goals (skips goal-designer ideation). See `agents/goal-designer.md` for the schema. |
-| `focus` | `''` | Comma-separated focus areas (e.g. `tests,security,docs`) |
-| `ignore` | `''` | Comma-separated glob patterns to ignore |
-| `git-user-name` | `'autoresearch-bot'` | Git author for commits |
-| `git-user-email` | `'autoresearch-bot@users.noreply.github.com'` | |
-| `loop-timeout-minutes` | `'240'` | Per-goal timeout for the autoresearch-loop job. Bump if iterations are slow or `max-iterations-per-goal` is high. |
+| `pi-provider` | *(required)* | Anything Pi supports — `ollama`, `anthropic`, `openai`, `google`, `groq`, `mistral`, `openrouter`, `xai`, `cerebras`, `deepseek`, etc. |
+| `pi-model` | *(required)* | Model id (e.g. `kimi-k2.6:cloud`, `anthropic/claude-sonnet-4-6`, `openrouter/google/gemini-2.0-flash`) |
+| `goal` | `''` | Goal text. Empty → auto-goal mode. |
+| `focus` | `''` | Auto-goal only: comma-sep focus areas (`tests,perf,docs`) |
+| `ignore` | `''` | Auto-goal only: comma-sep glob patterns to avoid |
+| `max-iterations` | `'10'` | Written to `autoresearch.config.json`. pi-autoresearch self-stops at this cap. |
+| `driver-timeout-seconds` | `'3300'` | Wall-clock backstop for the RPC driver. Should be less than the job's `timeout-minutes` × 60 to leave room for harvest + PR. |
+| `pi-autoresearch-ref` | `https://github.com/davebcn87/pi-autoresearch` | Pin to a commit for reproducibility |
+| `base-branch` | `'main'` | Branch to base the experiment on, and to PR against |
+| `open-pr` | `'true'` | Set `'false'` to push the branch but skip the PR |
+| `git-user-name` | `autoresearch-bot` | |
+| `git-user-email` | `autoresearch-bot@users.noreply.github.com` | |
 
-## Architecture
+## Outputs
+
+| Output | Description |
+|---|---|
+| `run-id` | Generated run id |
+| `branch` | Experiment branch name |
+| `kept-commits` | Number of commits the loop kept |
+| `pr-url` | PR URL if one was opened |
+
+## What the action does
 
 ```
-setup
-  └─ goal-design (agent: goal-designer, sonnet 4.6)
-       │  Reads repo, memory, attempts log. Proposes N {goal, benchmark, guard, direction, scope}.
-       │  Or passes through user-supplied `goals` input.
-       ↓
-  ┌────────── matrix per goal ──────────┐
-  │  autoresearch-loop                  │
-  │    Per iteration:                   │
-  │    1. iteration-runner agent picks  │
-  │       ONE focused change, commits   │
-  │    2. workflow runs benchmark_cmd   │
-  │    3. workflow runs guard_cmd       │
-  │    4. keep | revert | no_op         │
-  │    Halts on cap or plateau-K        │
-  │           ↓                          │
-  │  experiment-judge (opus 4.7)        │
-  │    Reads git diff main..HEAD        │
-  │    Returns holistic verdict          │
-  └─────────────────────────────────────┘
-       ↓
-  open-prs (one PR per goal with kept commits)
-       ↓
-  finish (publish report to step summary, persist state)
+install pi + pi-autoresearch extension
+install ollama (if provider=ollama)
+create experiment branch from base
+write autoresearch.config.json (with maxIterations)
+spawn `pi --mode rpc --provider X --model Y`
+scripts/pi_rpc_driver.py:
+  • send /skill:autoresearch-create with goal (or auto-goal kickoff)
+  • stream JSONL events to pi-events.jsonl
+  • poll get_state every 30s, exit when idle for 2 consecutive checks
+  • abort + exit on wall-clock timeout
+push experiment branch
+open PR (if any commits kept and open-pr: true)
+upload run artifacts
 ```
-
-## Three agents, that's it
-
-- **`goal-designer.md`** (sonnet 4.6) — picks what to optimize and how to measure it
-- **`iteration-runner.md`** (sonnet 4.6) — proposes one focused change per iteration
-- **`experiment-judge.md`** (opus 4.7) — reads the full branch and gives a holistic merge verdict
-
-The mechanical loop (in `scripts/autoresearch_loop.py`) is the core; everything else is wrapping.
 
 ## What gets opened on your repo
 
-Per goal, the action creates:
+Per run:
+- A branch `autoresearch/exp/<run-id>` with whatever pi-autoresearch kept
+- A PR against `main` with the goal, provider/model, and `autoresearch.md` session log in the body — only if at least one commit landed
 
-- A branch `autoresearch/exp/<run-id>/<goal-id>` with the kept commits from the loop
-- A PR against `main` with the holistic verdict + metric trajectory + iteration log in the body (skipped if the loop produced zero kept commits)
+## Cost and rate limits
 
-It also persists narrative state to a `autoresearch-state` branch so future runs accumulate context.
-
-## Cost
-
-Roughly per goal:
-- 1 goal-design call (sonnet)
-- N iteration-runner calls (sonnet) — N up to `max-iterations-per-goal`
-- 1 experiment-judge call (opus)
-
-For a 2-goal × 10-iteration run: ~$5–15 depending on repo size and how chunky the diffs get.
+- pi-autoresearch loops are autonomous — they can burn tokens fast. Cap with `max-iterations` and your provider's per-key billing limits.
+- For cheap iteration, use ollama-cloud models (`kimi-k2.6:cloud`, `qwen3-coder:480b-cloud`, etc.) — typically much cheaper than frontier APIs.
 
 ## Smoke test
 
-`.github/workflows/self-test.yml` dispatches the pipeline against a fixture (`fixtures/todo-corpus/`) with a deliberately simple goal: reduce TODO count, guarded by Python parse validity. Runs in ~5 minutes. Validates the loop end-to-end without burning real budget.
+`.github/workflows/self-test.yml` dispatches the pipeline against `fixtures/todo-corpus/` with a tiny goal: reduce TODO count, guarded by `python3 -m py_compile`. 3 iterations, ~5 minutes, validates the install + RPC plumbing without burning real budget.
 
 ## License
 

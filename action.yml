@@ -1,80 +1,101 @@
-name: 'Claude autoresearch — setup'
-description: 'Install Claude Code, claude-autoresearch-action agents, and the loop scripts. Used as a step in each job of claude-autoresearch.yml.'
+name: 'Pi autoresearch'
+description: 'Run pi-autoresearch (autonomous experiment loop) inside a Pi RPC session, push the experiment branch, and open a PR. Single-step composite — drop into any job.'
 author: 'Dylan Murray'
 branding:
   icon: 'rotate-ccw'
   color: 'purple'
 
 inputs:
-  claude-oauth-token:
-    description: 'Long-lived Claude Code OAuth token (subscription auth). Generate with `claude setup-token`. Provide this OR `anthropic-api-key`.'
+  pi-provider:
+    description: 'Pi provider id. Anything Pi supports — ollama, anthropic, openai, google, groq, mistral, openrouter, xai, cerebras, deepseek, etc.'
+    required: true
+  pi-model:
+    description: 'Pi model id (e.g. gpt-oss:120b-cloud, anthropic/claude-sonnet-4-6, openrouter/google/gemini-2.0-flash).'
+    required: true
+  goal:
+    description: 'Goal description fed to /skill:autoresearch-create. Leave empty for auto-goal mode (Pi picks the metric itself).'
     required: false
     default: ''
-  anthropic-api-key:
-    description: 'Anthropic API key. Provide this OR `claude-oauth-token`.'
+  focus:
+    description: 'Auto-goal only: comma-sep focus areas (e.g. tests,perf,docs).'
     required: false
     default: ''
+  ignore:
+    description: 'Auto-goal only: comma-sep glob patterns to avoid.'
+    required: false
+    default: ''
+  max-iterations:
+    description: 'maxIterations cap written to autoresearch.config.json. pi-autoresearch self-stops at this number.'
+    required: false
+    default: '10'
+  driver-timeout-seconds:
+    description: 'Wall-clock backstop for the RPC driver. Should be less than the consuming job''s timeout-minutes (in seconds) to leave room for harvest + PR.'
+    required: false
+    default: '3300'
+  pi-autoresearch-ref:
+    description: 'Git URL or ref of the pi-autoresearch extension. Pin to a commit for reproducibility.'
+    required: false
+    default: 'https://github.com/davebcn87/pi-autoresearch'
+  base-branch:
+    description: 'Branch to base the experiment branch on, and to open the PR against.'
+    required: false
+    default: 'main'
+  open-pr:
+    description: 'Whether to open a PR after the loop. `true` (default) | `false` (just push the experiment branch).'
+    required: false
+    default: 'true'
   git-user-name:
-    description: 'Git author name for autoresearch commits.'
     required: false
     default: 'autoresearch-bot'
   git-user-email:
-    description: 'Git author email for autoresearch commits.'
     required: false
     default: 'autoresearch-bot@users.noreply.github.com'
 
 outputs:
-  claude-path:
-    description: 'Absolute path to the installed claude binary.'
-    value: ${{ steps.install-claude.outputs.claude-path }}
+  run-id:
+    description: 'Generated run id (used in the experiment branch name).'
+    value: ${{ steps.gen.outputs.run-id }}
+  branch:
+    description: 'Experiment branch name (autoresearch/exp/<run-id>).'
+    value: ${{ steps.gen.outputs.branch }}
+  kept-commits:
+    description: 'Number of commits the loop kept on the experiment branch.'
+    value: ${{ steps.harvest.outputs.kept-commits }}
+  pr-url:
+    description: 'PR URL if one was opened, else empty.'
+    value: ${{ steps.open-pr.outputs.pr-url }}
 
 runs:
   using: composite
   steps:
-    - name: Verify credentials
-      shell: bash
-      env:
-        OAUTH_TOKEN: ${{ inputs.claude-oauth-token }}
-        API_KEY: ${{ inputs.anthropic-api-key }}
-      run: |
-        set -e
-        if [ -z "$OAUTH_TOKEN" ] && [ -z "$API_KEY" ]; then
-          echo "::error::Provide either \`claude-oauth-token\` (subscription auth) or \`anthropic-api-key\` (API auth)."
-          exit 1
-        fi
-
     - name: Setup Node.js
       uses: actions/setup-node@v4
       with:
         node-version: '20'
 
-    - name: Install latest Claude Code
-      id: install-claude
+    - name: Install pi-coding-agent
       shell: bash
       run: |
         set -e
-        npm install -g @anthropic-ai/claude-code@latest
-        CLAUDE_PATH="$(which claude)"
-        echo "claude path: $CLAUDE_PATH"
-        claude --version
-        echo "claude-path=$CLAUDE_PATH" >> "$GITHUB_OUTPUT"
+        npm install -g @mariozechner/pi-coding-agent
+        pi --version
 
-    - name: Install agents and scripts
+    - name: Install ollama (provider=ollama)
+      if: inputs.pi-provider == 'ollama'
+      shell: bash
+      run: |
+        set -e
+        curl -fsSL https://ollama.com/install.sh | sh
+        ollama --version
+
+    - name: Install pi-autoresearch extension
       shell: bash
       env:
-        ACTION_PATH: ${{ github.action_path }}
+        PI_AUTORESEARCH_REF: ${{ inputs.pi-autoresearch-ref }}
       run: |
         set -e
-        mkdir -p "$HOME/.claude/agents"
-        cp "$ACTION_PATH/agents/"*.md "$HOME/.claude/agents/"
-        echo "Installed agents at $HOME/.claude/agents/:"
-        ls "$HOME/.claude/agents/"
-
-        mkdir -p "$HOME/.claude/scripts"
-        cp "$ACTION_PATH/scripts/"*.py "$HOME/.claude/scripts/"
-        chmod +x "$HOME/.claude/scripts/"*.py
-        echo "Installed scripts at $HOME/.claude/scripts/:"
-        ls "$HOME/.claude/scripts/"
+        pi install "$PI_AUTORESEARCH_REF"
+        echo "Installed pi-autoresearch extension."
 
     - name: Configure git
       shell: bash
@@ -86,3 +107,175 @@ runs:
         git config --global user.name "$GIT_USER_NAME"
         git config --global user.email "$GIT_USER_EMAIL"
         git config --global init.defaultBranch main
+
+    - name: Generate run-id and branch
+      id: gen
+      shell: bash
+      run: |
+        set -e
+        RUN_ID="$(date -u +%Y%m%d-%H%M%S)-$(openssl rand -hex 3)"
+        BRANCH="autoresearch/exp/${RUN_ID}"
+        echo "run-id=$RUN_ID" >> "$GITHUB_OUTPUT"
+        echo "branch=$BRANCH" >> "$GITHUB_OUTPUT"
+        echo "run_id=$RUN_ID branch=$BRANCH"
+
+    - name: Create experiment branch
+      shell: bash
+      env:
+        BRANCH: ${{ steps.gen.outputs.branch }}
+        BASE: ${{ inputs.base-branch }}
+      run: |
+        set -e
+        git fetch origin "$BASE"
+        git branch "$BRANCH" "origin/$BASE"
+        git push -u origin "$BRANCH"
+        git checkout "$BRANCH"
+        echo "Checked out $BRANCH (from origin/$BASE)"
+
+    - name: Write autoresearch.config.json
+      shell: bash
+      env:
+        MAX_ITER: ${{ inputs.max-iterations }}
+      run: |
+        set -e
+        python3 - <<'PY'
+        import json, os
+        cfg = {"maxIterations": int(os.environ["MAX_ITER"])}
+        with open("autoresearch.config.json", "w") as f:
+            json.dump(cfg, f, indent=2)
+        print(f"Wrote autoresearch.config.json: {cfg}")
+        PY
+
+    - name: Run pi-autoresearch via RPC driver
+      shell: bash
+      env:
+        PI_PROVIDER: ${{ inputs.pi-provider }}
+        PI_MODEL: ${{ inputs.pi-model }}
+        GOAL_TEXT: ${{ inputs.goal }}
+        AUTO_GOAL_FOCUS: ${{ inputs.focus }}
+        AUTO_GOAL_IGNORE: ${{ inputs.ignore }}
+        TIMEOUT_SECONDS: ${{ inputs.driver-timeout-seconds }}
+        EVENT_LOG: pi-events.jsonl
+        ACTION_PATH: ${{ github.action_path }}
+      run: |
+        set -e
+        # Provider API keys are inherited from the consumer's `env:` block.
+        # Pi reads its provider-specific env var directly (e.g. OLLAMA_API_KEY,
+        # ANTHROPIC_API_KEY); we don't enumerate them here.
+        python3 "$ACTION_PATH/scripts/pi_rpc_driver.py"
+
+    - name: Harvest results
+      id: harvest
+      shell: bash
+      env:
+        BRANCH: ${{ steps.gen.outputs.branch }}
+        BASE: ${{ inputs.base-branch }}
+      run: |
+        set -e
+        git push origin "$BRANCH"
+        KEPT=$(git rev-list --count "origin/$BASE..$BRANCH")
+        echo "kept-commits=$KEPT" >> "$GITHUB_OUTPUT"
+        echo "kept commits on $BRANCH: $KEPT"
+
+    - name: Open PR
+      id: open-pr
+      if: inputs.open-pr == 'true' && steps.harvest.outputs.kept-commits != '0'
+      shell: bash
+      env:
+        BRANCH: ${{ steps.gen.outputs.branch }}
+        BASE: ${{ inputs.base-branch }}
+        GOAL: ${{ inputs.goal }}
+        PROVIDER: ${{ inputs.pi-provider }}
+        MODEL: ${{ inputs.pi-model }}
+        MAX_ITER: ${{ inputs.max-iterations }}
+        KEPT: ${{ steps.harvest.outputs.kept-commits }}
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        set -e
+        # In auto-goal mode, infer a title from autoresearch.md's first heading.
+        if [ -z "$GOAL" ]; then
+          if [ -f autoresearch.md ]; then
+            GOAL=$(awk '/^# / {sub(/^# */, ""); print; exit}' autoresearch.md)
+          fi
+          : "${GOAL:=auto-goal experiment}"
+          GOAL_LABEL="**Goal (auto-chosen):** $GOAL"
+        else
+          GOAL_LABEL="**Goal:** $GOAL"
+        fi
+        TITLE="autoresearch: $GOAL"
+        TITLE="${TITLE:0:140}"
+
+        BODY_FILE=$(mktemp)
+        {
+          echo "## Autoresearch experiment"
+          echo
+          echo "$GOAL_LABEL"
+          echo
+          echo "| | |"
+          echo "|---|---|"
+          echo "| Provider | \`$PROVIDER\` |"
+          echo "| Model | \`$MODEL\` |"
+          echo "| Max iterations | $MAX_ITER |"
+          echo "| Kept commits | $KEPT |"
+          echo
+          echo "### Session"
+          echo
+          if [ -f autoresearch.md ]; then
+            echo '<details><summary>autoresearch.md</summary>'
+            echo
+            echo '```markdown'
+            cat autoresearch.md
+            echo
+            echo '```'
+            echo '</details>'
+          else
+            echo "_(no autoresearch.md produced)_"
+          fi
+          echo
+          echo "---"
+          echo "*Opened by [\`pi-autoresearch-action\`](https://github.com/dylan-murray/pi-autoresearch-action). Every commit on this branch was generated by an AI agent — review carefully before merging.*"
+        } > "$BODY_FILE"
+
+        URL=$(gh pr create \
+          --base "$BASE" \
+          --head "$BRANCH" \
+          --title "$TITLE" \
+          --label autoresearch \
+          --body-file "$BODY_FILE")
+        echo "pr-url=$URL" >> "$GITHUB_OUTPUT"
+        echo "$URL"
+
+    - name: Step summary
+      if: always()
+      shell: bash
+      env:
+        RUN_ID: ${{ steps.gen.outputs.run-id }}
+        BRANCH: ${{ steps.gen.outputs.branch }}
+        KEPT: ${{ steps.harvest.outputs.kept-commits }}
+        PR_URL: ${{ steps.open-pr.outputs.pr-url }}
+      run: |
+        {
+          echo "# Pi autoresearch — \`$RUN_ID\`"
+          echo
+          echo "| | |"
+          echo "|---|---|"
+          echo "| Branch | \`$BRANCH\` |"
+          echo "| Kept commits | ${KEPT:-0} |"
+          if [ -n "$PR_URL" ]; then
+            echo "| PR | $PR_URL |"
+          fi
+        } >> "$GITHUB_STEP_SUMMARY"
+
+    - name: Upload run artifacts
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: pi-run-${{ steps.gen.outputs.run-id }}
+        path: |
+          pi-events.jsonl
+          autoresearch.md
+          autoresearch.jsonl
+          autoresearch.config.json
+          autoresearch.sh
+          autoresearch.checks.sh
+        if-no-files-found: warn
