@@ -52,6 +52,77 @@ def stderr(msg: str) -> None:
     print(f"[pi-driver] {msg}", file=sys.stderr, flush=True)
 
 
+def stream(msg: str) -> None:
+    """Echo a one-line digest of pi's activity to stdout (visible live)."""
+    print(f"[pi] {msg}", flush=True)
+
+
+def truncate(s: str, n: int = 200) -> str:
+    s = " ".join((s or "").split())  # collapse whitespace
+    return s if len(s) <= n else s[: n - 1] + "…"
+
+
+def digest_event(event: dict) -> str | None:
+    """Return a humanized one-liner for an event, or None to skip.
+
+    Pi RPC emits a stream of message_update events for each turn — thinking,
+    text, tool_call, tool_result. We surface only the meaningful boundaries
+    (turn end, tool call, tool result) so the action log reads like a
+    transcript instead of a JSONL dump.
+    """
+    t = event.get("type")
+    if t == "response":
+        cmd = event.get("command")
+        if cmd == "get_state":
+            return None  # noisy, we already log idle status separately
+        ok = "✓" if event.get("success") else "✗"
+        rid = event.get("id", "")
+        return f"{ok} {cmd}{f' (id={rid})' if rid else ''}"
+
+    if t != "message_update":
+        return None
+
+    ame = event.get("assistantMessageEvent") or {}
+    ame_type = ame.get("type", "")
+
+    # Skip streaming deltas — only surface end-of-X events.
+    if ame_type == "text_end":
+        # Newer schemas keep text in `content`; older may have it on `partial`.
+        text = ame.get("content")
+        if not text:
+            partial = ame.get("partial") or {}
+            for block in partial.get("content") or []:
+                if block.get("type") == "text":
+                    text = block.get("text", "")
+        return f"💬 {truncate(text)}" if text else None
+
+    if ame_type == "thinking_end":
+        # Skip thinking — usually verbose internal monologue.
+        return None
+
+    if ame_type == "toolcall_end":
+        tc = ame.get("toolCall") or {}
+        name = tc.get("name") or "?"
+        args = tc.get("arguments") or {}
+        # Pull a short identifier — first string-ish value, or a key=value.
+        hint = ""
+        for k, v in args.items():
+            if isinstance(v, str):
+                hint = truncate(v, 80)
+                break
+            elif isinstance(v, (int, float, bool)):
+                hint = f"{k}={v}"
+                break
+        return f"→ {name}({hint})" if hint else f"→ {name}()"
+
+    if ame_type == "toolresult":
+        # Older schemas may send tool results as a separate event type.
+        result = ame.get("result") or ame.get("content") or ""
+        return f"← {truncate(str(result), 120)}"
+
+    return None
+
+
 def reader_thread(stream, q: queue.Queue) -> None:
     """Forward each stdout line into the event queue. EOF → sentinel None."""
     for line in iter(stream.readline, ""):
@@ -194,6 +265,11 @@ def main() -> int:
             event = json.loads(line)
         except json.JSONDecodeError:
             continue
+
+        # Stream a humanized one-liner per event so the action log is readable
+        digest = digest_event(event)
+        if digest:
+            stream(digest)
 
         # State response → idleness detection
         if (
