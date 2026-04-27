@@ -86,6 +86,7 @@ Bedrock and Azure aren't wired here yet (they need OIDC / IAM setup).
 | `pi-autoresearch-ref` | `https://github.com/davebcn87/pi-autoresearch` | Pin to a commit for reproducibility |
 | `base-branch` | `'main'` | Branch to base the experiment on, and to PR against |
 | `open-pr` | `'true'` | Set `'false'` to push the branch but skip the PR |
+| `stream-events` | `'false'` | Print a live transcript of pi's activity to the action log. ⚠️ Event content can include file bodies / tool args / env values — on public repos these logs are world-readable. |
 | `git-user-name` | `autoresearch-bot` | |
 | `git-user-email` | `autoresearch-bot@users.noreply.github.com` | |
 

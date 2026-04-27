@@ -1,11 +1,7 @@
 name: Self-test (smoke)
 
-# Manual smoke test that calls the composite action against the repo.
-# Validates the install + RPC plumbing end-to-end.
-#
-# Two modes via the `auto-goal` toggle:
-#   false (default): explicit TODO-removal goal targeting fixtures/todo-corpus/
-#   true: empty goal — pi picks its own metric by exploring the repo
+# Manual smoke test that calls the composite action against this repo in
+# auto-goal mode — pi explores the repo and picks its own metric.
 #
 # Push does NOT trigger this; otherwise pushing the workflow file would
 # loop the action.
@@ -26,8 +22,8 @@ on:
         description: 'maxIterations (default 3 for smoke)'
         type: string
         default: '3'
-      auto-goal:
-        description: 'Let pi pick its own metric (free mode). Ignores the fixture goal.'
+      stream-events:
+        description: 'Stream pi events live to the action log (verbose; may show repo content)'
         type: boolean
         default: false
 
@@ -36,13 +32,6 @@ permissions:
   pull-requests: write
   issues: write
 
-env:
-  # Provider keys for the action — set whichever you have as secrets;
-  # pi reads only the one matching `pi-provider`.
-  OLLAMA_API_KEY: ${{ secrets.OLLAMA_API_KEY }}
-  ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-  OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
-
 jobs:
   smoke:
     runs-on: ubuntu-latest
@@ -50,36 +39,18 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with: { fetch-depth: 0 }
-
-      - name: Run pi-autoresearch (auto-goal mode)
-        if: inputs.auto-goal
-        uses: ./
+      - uses: ./
         with:
           pi-provider: ${{ inputs.pi-provider }}
           pi-model: ${{ inputs.pi-model }}
           max-iterations: ${{ inputs.max-iterations }}
           driver-timeout-seconds: '1500'
+          # Empty goal → auto-goal mode (pi picks its own metric).
           goal: ''
-
-      - name: Run pi-autoresearch (explicit goal — TODO fixture)
-        if: '!inputs.auto-goal'
-        uses: ./
-        with:
-          pi-provider: ${{ inputs.pi-provider }}
-          pi-model: ${{ inputs.pi-model }}
-          max-iterations: ${{ inputs.max-iterations }}
-          driver-timeout-seconds: '1500'
-          goal: |
-            Reduce the number of TODO comments under fixtures/todo-corpus/ while
-            keeping every .py file in that directory parseable by python.
-
-            Benchmark command (the metric):
-              grep -rc 'TODO' fixtures/todo-corpus/ 2>/dev/null | awk -F: '{s+=$2} END {print "METRIC todo_count=" (s+0)}'
-
-            Direction: lower_is_better.
-
-            Backpressure check (must pass each iteration):
-              python3 -m py_compile fixtures/todo-corpus/*.py
-
-            Files in scope: fixtures/todo-corpus/**.
-            Do not modify any file outside that directory.
+          stream-events: ${{ inputs.stream-events }}
+        env:
+          # Add whichever provider keys you have set as secrets. Pi reads
+          # only the one matching `pi-provider`; the rest are ignored.
+          OLLAMA_API_KEY: ${{ secrets.OLLAMA_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
