@@ -1,1 +1,2 @@
 {"type":"config","name":"Reduce TODO count in fixtures/todo-corpus/","metricName":"todo_count","metricUnit":"","bestDirection":"lower"}
+{"run":1,"commit":"64da890","metric":13,"metrics":{"py_files":1},"status":"keep","description":"Baseline measurement of TODO count in fixtures/todo-corpus/","timestamp":1777267659960,"segment":0,"confidence":null,"iterationTokens":1958,"asi":{"hypothesis":"baseline measurement - count all TODO occurrences in fixtures/todo-corpus/ source files"}}
