@@ -17,7 +17,7 @@ on:
       pi-model:
         description: 'Pi model'
         type: string
-        default: 'gpt-oss:120b-cloud'
+        default: 'kimi-k2.6:cloud'
       max-iterations:
         description: 'maxIterations (default 3 for smoke)'
         type: string

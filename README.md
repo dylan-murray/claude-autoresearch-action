@@ -47,7 +47,7 @@ jobs:
       - uses: dylan-murray/pi-autoresearch-action@main
         with:
           pi-provider: 'ollama'
-          pi-model: 'gpt-oss:120b-cloud'
+          pi-model: 'kimi-k2.6:cloud'
           goal: ${{ inputs.goal }}
           max-iterations: '10'
         env:
@@ -81,7 +81,7 @@ Bedrock and Azure aren't wired here yet (they need OIDC / IAM setup).
 | Input | Default | Notes |
 |---|---|---|
 | `pi-provider` | *(required)* | Anything Pi supports — `ollama`, `anthropic`, `openai`, `google`, `groq`, `mistral`, `openrouter`, `xai`, `cerebras`, `deepseek`, etc. |
-| `pi-model` | *(required)* | Model id (e.g. `gpt-oss:120b-cloud`, `anthropic/claude-sonnet-4-6`, `openrouter/google/gemini-2.0-flash`) |
+| `pi-model` | *(required)* | Model id (e.g. `kimi-k2.6:cloud`, `anthropic/claude-sonnet-4-6`, `openrouter/google/gemini-2.0-flash`) |
 | `goal` | `''` | Goal text. Empty → auto-goal mode. |
 | `focus` | `''` | Auto-goal only: comma-sep focus areas (`tests,perf,docs`) |
 | `ignore` | `''` | Auto-goal only: comma-sep glob patterns to avoid |
@@ -129,7 +129,7 @@ Per run:
 ## Cost and rate limits
 
 - pi-autoresearch loops are autonomous — they can burn tokens fast. Cap with `max-iterations` and your provider's per-key billing limits.
-- For cheap iteration, use ollama-cloud models (`gpt-oss:120b-cloud`, `qwen3-coder:480b-cloud`, etc.) — typically much cheaper than frontier APIs.
+- For cheap iteration, use ollama-cloud models (`kimi-k2.6:cloud`, `qwen3-coder:480b-cloud`, etc.) — typically much cheaper than frontier APIs.
 
 ## Smoke test
 
