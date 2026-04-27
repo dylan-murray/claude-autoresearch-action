@@ -49,11 +49,13 @@ inputs:
     required: false
     default: 'false'
   git-user-name:
+    description: 'Git author name for autoresearch commits.'
     required: false
-    default: 'autoresearch-bot'
+    default: 'github-actions[bot]'
   git-user-email:
+    description: 'Git author email. The default uses the github-actions bot user-id prefix so commits are attributed to GitHub Actions and never auto-link to a real human / squatted username.'
     required: false
-    default: 'autoresearch-bot@users.noreply.github.com'
+    default: '41898282+github-actions[bot]@users.noreply.github.com'
 
 outputs:
   run-id:
