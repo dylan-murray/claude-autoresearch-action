@@ -175,7 +175,11 @@ runs:
         AUTO_GOAL_FOCUS: ${{ inputs.focus }}
         AUTO_GOAL_IGNORE: ${{ inputs.ignore }}
         TIMEOUT_SECONDS: ${{ inputs.driver-timeout-seconds }}
-        EVENT_LOG: pi-events.jsonl
+        # Write the RPC event log OUTSIDE the worktree — otherwise
+        # pi-autoresearch's log_experiment (which git-adds everything in cwd)
+        # sweeps it into every commit, bloating the PR diff with megabytes
+        # of streaming agent traces.
+        EVENT_LOG: ${{ runner.temp }}/pi-events.jsonl
         ACTION_PATH: ${{ github.action_path }}
       run: |
         set -e
@@ -233,7 +237,10 @@ runs:
         else
           GOAL_LABEL="**Goal:** $GOAL"
         fi
-        TITLE="autoresearch: $GOAL"
+        # Collapse whitespace (newlines + runs of spaces) so multi-line
+        # goal text doesn't break the PR title; then truncate to 140 chars.
+        TITLE_RAW="autoresearch: $GOAL"
+        TITLE=$(printf '%s' "$TITLE_RAW" | tr '\n' ' ' | tr -s '[:space:]' ' ')
         TITLE="${TITLE:0:140}"
 
         BODY_FILE=$(mktemp)
@@ -309,7 +316,7 @@ runs:
       with:
         name: pi-run-${{ steps.gen.outputs.run-id }}
         path: |
-          pi-events.jsonl
+          ${{ runner.temp }}/pi-events.jsonl
           autoresearch.md
           autoresearch.jsonl
           autoresearch.config.json
