@@ -1,8 +1,8 @@
-# pi-autoresearch-action
+# pi-autoresearch-action 🔬
 
-> Run [pi-autoresearch](https://github.com/davebcn87/pi-autoresearch) — autonomous experiment loops via the [Pi coding agent](https://pi.dev) — as a GitHub Action. Bring any LLM (ollama, anthropic, openai); pi-autoresearch owns the loop, we just plumb it.
+Run [pi-autoresearch](https://github.com/davebcn87/pi-autoresearch) — autonomous experiment loops via the [Pi coding agent](https://pi.dev) — as a GitHub Action. Bring any LLM (ollama, anthropic, openai); pi-autoresearch owns the loop, we just plumb it.
 
-## What this is
+## ⚙️ What this is
 
 A reusable GitHub workflow that:
 
@@ -15,13 +15,7 @@ A reusable GitHub workflow that:
 
 The whole loop lives inside Pi's runtime. This action is a thin, reusable wrapper.
 
-## Why use this vs. a Claude-only autoresearch action
-
-- **Bring your own model.** Pi has first-class support for 15+ providers (ollama, anthropic, openai, google, azure, bedrock, mistral, groq, …). Pick a cheap ollama-cloud model for iteration, a stronger model for judgment, swap mid-experiment.
-- **No permission gates.** Pi runs with the user's full host permissions out of the box — no `--dangerously-skip-permissions` flags, no permission prompts to script around in CI.
-- **The loop is someone else's problem.** pi-autoresearch is a polished extension with a dashboard, hooks, finalize skill, etc. We don't reimplement any of that.
-
-## Quickstart
+## 🚀 Quickstart
 
 In your repo, copy this workflow to `.github/workflows/autoresearch.yml`:
 
@@ -54,6 +48,8 @@ jobs:
           OLLAMA_API_KEY: ${{ secrets.OLLAMA_API_KEY }}
 ```
 
+## 🔑 Provider keys
+
 Provider keys flow via `env:` on the step — Pi reads its provider's standard env var directly. Set whichever matches your `pi-provider`:
 
 | Provider | Env var |
@@ -71,12 +67,12 @@ Provider keys flow via `env:` on the step — Pi reads its provider's standard e
 
 Bedrock and Azure aren't wired here yet (they need OIDC / IAM setup).
 
-### Two modes
+## 🎯 Two modes
 
 - **Auto-goal** (`goal: ''` or omitted): the agent scans the repo and picks a meaningful metric on its own. Optionally steer with `focus: 'tests,perf'` and `ignore: 'vendor/**,node_modules/**'`.
 - **Explicit goal** (`goal: '...'`): you describe what to optimize, the metric command, and the backpressure check. More predictable; use when you know what you want.
 
-## Inputs
+## 📥 Inputs
 
 | Input | Default | Notes |
 |---|---|---|
@@ -93,7 +89,7 @@ Bedrock and Azure aren't wired here yet (they need OIDC / IAM setup).
 | `git-user-name` | `autoresearch-bot` | |
 | `git-user-email` | `autoresearch-bot@users.noreply.github.com` | |
 
-## Outputs
+## 📤 Outputs
 
 | Output | Description |
 |---|---|
@@ -102,7 +98,7 @@ Bedrock and Azure aren't wired here yet (they need OIDC / IAM setup).
 | `kept-commits` | Number of commits the loop kept |
 | `pr-url` | PR URL if one was opened |
 
-## What the action does
+## 🔧 What the action does
 
 ```
 install pi + pi-autoresearch extension
@@ -120,21 +116,16 @@ open PR (if any commits kept and open-pr: true)
 upload run artifacts
 ```
 
-## What gets opened on your repo
+## 📦 What gets opened on your repo
 
 Per run:
 - A branch `autoresearch/exp/<run-id>` with whatever pi-autoresearch kept
 - A PR against `main` with the goal, provider/model, and `autoresearch.md` session log in the body — only if at least one commit landed
 
-## Cost and rate limits
+## 💸 Cost and rate limits
 
-- pi-autoresearch loops are autonomous — they can burn tokens fast. Cap with `max-iterations` and your provider's per-key billing limits.
-- For cheap iteration, use ollama-cloud models (`kimi-k2.6:cloud`, `qwen3-coder:480b-cloud`, etc.) — typically much cheaper than frontier APIs.
+pi-autoresearch loops are autonomous — they can burn tokens fast. Cap with `max-iterations` and your provider's per-key billing limits.
 
-## Smoke test
-
-`.github/workflows/self-test.yml` dispatches the pipeline against `fixtures/todo-corpus/` with a tiny goal: reduce TODO count, guarded by `python3 -m py_compile`. 3 iterations, ~5 minutes, validates the install + RPC plumbing without burning real budget.
-
-## License
+## 📄 License
 
 MIT
