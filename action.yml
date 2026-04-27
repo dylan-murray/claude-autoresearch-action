@@ -139,7 +139,7 @@ runs:
         git config --global user.email "$GIT_USER_EMAIL"
         git config --global init.defaultBranch main
 
-    - name: Generate run-id
+    - name: Generate run-id and prep experiment dir
       id: gen
       shell: bash
       env:
@@ -147,8 +147,11 @@ runs:
       run: |
         set -e
         RUN_ID="$(date -u +%Y%m%d-%H%M%S)-$(openssl rand -hex 3)"
+        EXPERIMENT_DIR=".autoresearch/exp/${RUN_ID}"
+        mkdir -p "$EXPERIMENT_DIR"
         echo "run-id=$RUN_ID" >> "$GITHUB_OUTPUT"
-        echo "run_id=$RUN_ID"
+        echo "experiment-dir=$EXPERIMENT_DIR" >> "$GITHUB_OUTPUT"
+        echo "run_id=$RUN_ID experiment_dir=$EXPERIMENT_DIR"
         # pi-autoresearch's autoresearch-create skill does
         # `git checkout -b autoresearch/<goal>-<date>` itself, so we don't
         # pre-create a branch — we just sit on $BASE and let pi spin its own.
@@ -158,6 +161,7 @@ runs:
 
     - name: Write autoresearch.config.json
       shell: bash
+      working-directory: ${{ steps.gen.outputs.experiment-dir }}
       env:
         MAX_ITER: ${{ inputs.max-iterations }}
       run: |
@@ -172,12 +176,14 @@ runs:
 
     - name: Run pi-autoresearch via RPC driver
       shell: bash
+      working-directory: ${{ steps.gen.outputs.experiment-dir }}
       env:
         PI_PROVIDER: ${{ inputs.pi-provider }}
         PI_MODEL: ${{ inputs.pi-model }}
         GOAL_TEXT: ${{ inputs.goal }}
         AUTO_GOAL_FOCUS: ${{ inputs.focus }}
         AUTO_GOAL_IGNORE: ${{ inputs.ignore }}
+        EXPERIMENT_DIR: ${{ steps.gen.outputs.experiment-dir }}
         TIMEOUT_SECONDS: ${{ inputs.driver-timeout-seconds }}
         # Write the RPC event log OUTSIDE the worktree — otherwise
         # pi-autoresearch's log_experiment (which git-adds everything in cwd)
@@ -191,6 +197,8 @@ runs:
         # Provider API keys are inherited from the consumer's `env:` block.
         # Pi reads its provider-specific env var directly (e.g. OLLAMA_API_KEY,
         # ANTHROPIC_API_KEY); we don't enumerate them here.
+        # Pi spawns from the experiment subdir so its session files
+        # (autoresearch.md/.sh/.checks.sh/.jsonl) land there, not at repo root.
         python3 "$ACTION_PATH/scripts/pi_rpc_driver.py"
 
     - name: Harvest results
@@ -322,9 +330,5 @@ runs:
         name: pi-run-${{ steps.gen.outputs.run-id }}
         path: |
           ${{ runner.temp }}/pi-events.jsonl
-          autoresearch.md
-          autoresearch.jsonl
-          autoresearch.config.json
-          autoresearch.sh
-          autoresearch.checks.sh
+          ${{ steps.gen.outputs.experiment-dir }}/
         if-no-files-found: warn

@@ -144,6 +144,9 @@ def main() -> int:
     goal_text = os.environ.get("GOAL_TEXT", "").strip()
     auto_focus = os.environ.get("AUTO_GOAL_FOCUS", "").strip()
     auto_ignore = os.environ.get("AUTO_GOAL_IGNORE", "").strip()
+    # The action sets EXPERIMENT_DIR when it cd's pi into a subdir; we cite
+    # it in the kickoff so pi understands cwd and writes session files there.
+    experiment_dir = os.environ.get("EXPERIMENT_DIR", "").strip()
     timeout = int(os.environ.get("TIMEOUT_SECONDS", "3600"))
     pi_bin = os.environ.get("PI_BIN", "pi")
     event_log = Path(os.environ.get("EVENT_LOG", "pi-events.jsonl"))
@@ -178,10 +181,28 @@ def main() -> int:
     event_log.parent.mkdir(parents=True, exist_ok=True)
     log_fh = event_log.open("w", buffering=1)
 
+    # Working-directory note pi gets in every kickoff: session files live
+    # in the experiment subdir, but git ops (checkout, log, diff) and
+    # benchmark scripts that touch product code should reference the repo
+    # root via $(git rev-parse --show-toplevel).
+    if experiment_dir:
+        cwd_block = (
+            f"\n\nCWD: you are running from `{experiment_dir}`. The "
+            "autoresearch.config.json is already here. Write all session "
+            "files (autoresearch.md, autoresearch.sh, autoresearch.checks.sh, "
+            "any custom benchmark helpers) in this directory — NOT at the "
+            "repo root. If your benchmark or check needs repo source, use "
+            '`cd "$(git rev-parse --show-toplevel)"` or repo-root-relative '
+            "paths inside the script.\n"
+        )
+    else:
+        cwd_block = ""
+
     if goal_text:
         kickoff_message = (
             "/skill:autoresearch-create\n\n"
-            f"{goal_text}\n\n"
+            f"{goal_text}"
+            f"{cwd_block}\n"
             "Use the maxIterations from autoresearch.config.json (already written). "
             "Stop when that cap is reached. Auto-commit kept iterations. Do not "
             "ask follow-up questions — infer from this prompt and the repo."
@@ -217,7 +238,8 @@ def main() -> int:
             "judgment call); each iteration's benchmark + check should run "
             "in a reasonable time so the loop makes progress; stay scoped "
             "(don't try to optimize the whole repo at once)."
-            f"{steer_block}\n\n"
+            f"{steer_block}"
+            f"{cwd_block}\n"
             "Use the maxIterations cap from autoresearch.config.json. Stop "
             "when it's hit. Auto-commit kept iterations. Infer everything "
             "from the repo and this prompt."
