@@ -147,12 +147,13 @@ runs:
       run: |
         set -e
         RUN_ID="$(date -u +%Y%m%d-%H%M%S)-$(openssl rand -hex 3)"
+        EXPERIMENT_DIR=".autoresearch/exp/${RUN_ID}"
         echo "run-id=$RUN_ID" >> "$GITHUB_OUTPUT"
-        echo "run_id=$RUN_ID"
+        echo "experiment-dir=$EXPERIMENT_DIR" >> "$GITHUB_OUTPUT"
+        echo "run_id=$RUN_ID experiment_dir=$EXPERIMENT_DIR"
         # pi-autoresearch's autoresearch-create skill does
         # `git checkout -b autoresearch/<goal>-<date>` itself, so we don't
         # pre-create a branch — we just sit on $BASE and let pi spin its own.
-        # Make sure we're on the base branch when it's invoked.
         git fetch origin "$BASE"
         git checkout "$BASE" 2>/dev/null || git checkout -b "$BASE" "origin/$BASE"
 
@@ -192,6 +193,51 @@ runs:
         # Pi reads its provider-specific env var directly (e.g. OLLAMA_API_KEY,
         # ANTHROPIC_API_KEY); we don't enumerate them here.
         python3 "$ACTION_PATH/scripts/pi_rpc_driver.py"
+
+    - name: Relocate session files to experiment subdir
+      shell: bash
+      env:
+        EXPERIMENT_DIR: ${{ steps.gen.outputs.experiment-dir }}
+      run: |
+        set -e
+        # pi-autoresearch writes session files at repo root by design. Move
+        # the well-known ones into a per-run subdir so consumers can
+        # `.gitignore .autoresearch/` for clean PRs (or leave the dir
+        # committed for resumability). We only move filenames pi-autoresearch
+        # documents — custom benchmark helpers it authors stay where pi put
+        # them, since deciding "is this session noise or part of the product?"
+        # is reviewer-judgment, not ours.
+        SESSION_FILES=(
+          autoresearch.md
+          autoresearch.sh
+          autoresearch.checks.sh
+          autoresearch.jsonl
+          autoresearch.config.json
+        )
+        moved=0
+        mkdir -p "$EXPERIMENT_DIR"
+        for f in "${SESSION_FILES[@]}"; do
+          if [ -e "$f" ]; then
+            git mv "$f" "$EXPERIMENT_DIR/$f"
+            moved=$((moved+1))
+          fi
+        done
+        # autoresearch.hooks/ if it exists
+        if [ -d autoresearch.hooks ]; then
+          git mv autoresearch.hooks "$EXPERIMENT_DIR/autoresearch.hooks"
+          moved=$((moved+1))
+        fi
+        if [ "$moved" -eq 0 ]; then
+          echo "No session files at repo root to relocate."
+          exit 0
+        fi
+        # Only commit if we're on a branch that has commits (pi created one).
+        # If HEAD is still on the base branch, the loop never ran — leave
+        # the moves uncommitted; harvest will detect the no-op and skip.
+        if [ -n "$(git diff --cached --name-only)" ]; then
+          git commit -m "chore(autoresearch): relocate session files to $EXPERIMENT_DIR"
+          echo "Relocated $moved session entries; committed."
+        fi
 
     - name: Harvest results
       id: harvest
@@ -322,9 +368,5 @@ runs:
         name: pi-run-${{ steps.gen.outputs.run-id }}
         path: |
           ${{ runner.temp }}/pi-events.jsonl
-          autoresearch.md
-          autoresearch.jsonl
-          autoresearch.config.json
-          autoresearch.sh
-          autoresearch.checks.sh
+          ${{ steps.gen.outputs.experiment-dir }}/
         if-no-files-found: warn
