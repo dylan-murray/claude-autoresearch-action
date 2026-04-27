@@ -1,6 +1,8 @@
 __pycache__/
 *.py[cod]
 .pytest_cache/
+.ruff_cache/
+.venv/
 
 # Per-run state — flows between pipeline jobs as artifacts and persists to
 # the autoresearch-state branch. Shouldn't land on main.

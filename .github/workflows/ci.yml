@@ -1,0 +1,31 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  lint-and-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v3
+        with:
+          version: '0.7.9'
+      - name: Sync dependencies
+        run: uv sync --frozen
+      - name: ruff format --check
+        run: uv run ruff format --check scripts tests
+      - name: ruff check
+        run: uv run ruff check scripts tests
+      - name: pytest
+        run: uv run pytest

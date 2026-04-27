@@ -1,0 +1,34 @@
+[project]
+name = "pi-autoresearch-action"
+version = "0.1.0"
+description = "GitHub Action that runs pi-autoresearch (autonomous experiment loops) via the Pi coding agent."
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.11"
+# The runtime driver (scripts/pi_rpc_driver.py) uses only the standard
+# library — no runtime deps. The dependency-groups below are dev-only.
+dependencies = []
+
+[dependency-groups]
+dev = [
+  "pytest>=8.0",
+  "ruff>=0.6",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = [
+  "E",   # pycodestyle errors
+  "F",   # pyflakes
+  "W",   # pycodestyle warnings
+  "I",   # isort
+  "UP",  # pyupgrade
+  "B",   # bugbear
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra -q"
