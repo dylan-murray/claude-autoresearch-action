@@ -81,18 +81,7 @@ def main() -> int:
         stderr("PI_PROVIDER and PI_MODEL are required")
         return 2
 
-    # Pi has no native "ollama" provider. For Ollama Cloud models we wrap
-    # the spawn in `ollama launch pi`, which configures pi to talk to ollama
-    # and forwards remaining args after `--`. For every other provider we
-    # invoke pi directly with --provider/--model.
-    if provider == "ollama":
-        cmd = [
-            "ollama", "launch", "pi",
-            "--model", model, "-y", "--",
-            "--mode", "rpc",
-        ]
-    else:
-        cmd = [pi_bin, "--mode", "rpc", "--provider", provider, "--model", model]
+    cmd = [pi_bin, "--mode", "rpc", "--provider", provider, "--model", model]
     stderr(f"spawning: {' '.join(cmd)}")
     try:
         proc = subprocess.Popen(
@@ -103,8 +92,8 @@ def main() -> int:
             text=True,
             bufsize=1,
         )
-    except FileNotFoundError as e:
-        stderr(f"binary not found: {e}")
+    except FileNotFoundError:
+        stderr(f"pi binary not found at {pi_bin!r}")
         return 2
 
     q: queue.Queue = queue.Queue()
@@ -167,7 +156,6 @@ def main() -> int:
     state_check_interval = 30.0
     consecutive_idle = 0
     state_req_id = 0
-    declared_idle = False  # Set when we cleanly detected agent idleness
 
     def poll_state() -> None:
         nonlocal state_req_id
@@ -183,7 +171,6 @@ def main() -> int:
         if now > deadline:
             stderr("wall-clock timeout reached — sending abort")
             send(proc, {"id": "abort1", "type": "abort"})
-            declared_idle = True  # treat backstop as a graceful stop
             time.sleep(2)
             break
 
@@ -225,7 +212,6 @@ def main() -> int:
                 )
                 if consecutive_idle >= 2:
                     stderr("agent idle for two consecutive checks — done")
-                    declared_idle = True
                     break
             else:
                 consecutive_idle = 0
@@ -239,20 +225,6 @@ def main() -> int:
         proc.kill()
 
     stderr(f"event log: {event_log}")
-
-    # If pi died before we declared the loop done, surface the failure
-    # (sub-2s exits, "Unknown provider" errors, missing API keys, etc.)
-    if not declared_idle:
-        stderr(
-            "pi exited unexpectedly — see event log for the error. "
-            "Common causes: wrong provider name (no 'ollama' provider — use "
-            "ollama-launch wrapping; pi's real providers: openai, anthropic, "
-            "google, groq, mistral, openrouter, xai, cerebras, deepseek, "
-            "fireworks, ...), missing/wrong API key env var (note: google "
-            "uses GEMINI_API_KEY, not GOOGLE_API_KEY), or unrecognized model id."
-        )
-        return 2
-
     return 0
 
 

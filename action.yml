@@ -80,13 +80,40 @@ runs:
         npm install -g @mariozechner/pi-coding-agent
         pi --version
 
-    - name: Install ollama (provider=ollama)
+    - name: Register Ollama Cloud provider in pi (provider=ollama)
       if: inputs.pi-provider == 'ollama'
       shell: bash
+      env:
+        PI_MODEL: ${{ inputs.pi-model }}
       run: |
         set -e
-        curl -fsSL https://ollama.com/install.sh | sh
-        ollama --version
+        if [ -z "${OLLAMA_API_KEY:-}" ]; then
+          echo "::error::pi-provider=ollama requires OLLAMA_API_KEY in env (set it on the action step's env: block)."
+          exit 1
+        fi
+        # `ollama launch pi` writes a similar models.json that points pi at the
+        # local ollama daemon. We bypass the daemon by pointing pi directly at
+        # the cloud's OpenAI-compat endpoint with OLLAMA_API_KEY as the bearer.
+        # Avoids `ollama signin` entirely.
+        mkdir -p "$HOME/.pi/agent"
+        python3 - <<'PY'
+        import json, os
+        cfg = {
+            "providers": {
+                "ollama": {
+                    "baseUrl": "https://ollama.com/v1",
+                    "api": "openai-completions",
+                    "apiKey": os.environ["OLLAMA_API_KEY"],
+                    "models": [{"id": os.environ["PI_MODEL"]}],
+                }
+            }
+        }
+        with open(os.path.expanduser("~/.pi/agent/models.json"), "w") as f:
+            json.dump(cfg, f, indent=2)
+        # Mirror to stdout WITHOUT the apiKey for log readability
+        cfg["providers"]["ollama"]["apiKey"] = "***"
+        print(json.dumps(cfg, indent=2))
+        PY
 
     - name: Install pi-autoresearch extension
       shell: bash
