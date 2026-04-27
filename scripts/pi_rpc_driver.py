@@ -193,36 +193,56 @@ def main() -> int:
         # so the user can steer without writing a full goal.
         steers: list[str] = []
         if auto_focus:
-            steers.append(f"Focus areas: {auto_focus}.")
+            steers.append(f"Focus areas (steer toward): {auto_focus}.")
         if auto_ignore:
             steers.append(f"Avoid these globs: {auto_ignore}.")
         steer_block = ("\n\n" + "\n".join(steers)) if steers else ""
         kickoff_message = (
             "/skill:autoresearch-create\n\n"
-            "Auto-goal mode. Don't ask questions — explore the repository "
-            "yourself and pick something worth optimizing. You have full "
-            "license to:\n"
-            "- Author autoresearch.sh from scratch if no benchmark exists. "
-            "Build whatever harness fits the codebase: a shell pipeline, a "
-            "Python script, a tiny Go program, an instrumented test, "
-            "anything. The only contract is that it prints a single "
-            "`METRIC name=value` line.\n"
-            "- Author autoresearch.checks.sh similarly — whatever check "
-            "rejects regressions for this repo (tests, build, parse, "
-            "type-check, ad-hoc invariants — your call).\n"
-            "- Pick any metric you find compelling. Common, niche, or "
-            "specific to this codebase — the more meaningful, the better. "
-            "Decide the direction (lower or higher is better) yourself.\n\n"
-            "Constraints: the metric must be mechanical (a number, not a "
-            "judgment call); each iteration's benchmark + check should run "
-            "in a reasonable time so the loop makes progress; stay scoped "
-            "(don't try to optimize the whole repo at once)."
+            "Auto-goal mode. Don't ask questions — but DO take time to learn "
+            "the repository before you pick a goal. Past auto-goal runs have "
+            "picked superficial targets (recently-edited file, micro-perf in "
+            "a non-bottleneck) because they shortcut the exploration step. "
+            "Don't do that.\n\n"
+            "Phase 1 — Reconnaissance (mandatory, do this BEFORE deciding):\n"
+            "1. Read README.md (or README.* equivalent). What is this project?\n"
+            "2. Read CLAUDE.md, AGENTS.md, .cursor/rules, or similar agent\n"
+            "   memory files if they exist. They encode what the maintainers\n"
+            "   care about.\n"
+            "3. Read the build/dependency manifest (pyproject.toml, "
+            "package.json, Cargo.toml, go.mod, etc.) to identify language, "
+            "test runner, lint tooling.\n"
+            "4. List the top-level directory tree and identify the PRODUCT "
+            "code vs scaffolding (CI configs, fixtures, tooling).\n"
+            "5. Check `git log --oneline -20` to see what's actually being "
+            "worked on — that's a strong signal of what matters now.\n"
+            "6. Run any existing test/lint/build command once to see the "
+            "current health of the repo.\n\n"
+            "Phase 2 — Synthesize. In autoresearch.md, before picking a goal, "
+            "write a 'Repo summary' section answering: what does this project "
+            "do, what's the product code, what tooling exists, what's the "
+            "repo's current health? This forces grounding.\n\n"
+            "Phase 3 — Pick a meaningful goal:\n"
+            "- Target the PRODUCT code, not the scaffolding/tooling/CI/the "
+            "autoresearch machinery itself. Optimizing your own driver is a "
+            "smell.\n"
+            "- Pick something a maintainer would actually care about. "
+            "Improving a metric whose baseline is already so good it doesn't "
+            "matter (e.g. micro-perf on a non-bottleneck) is a smell even "
+            "when the number moves.\n"
+            "- The metric must be mechanical (a number, not a judgment "
+            "call) and the benchmark + check should run in a reasonable "
+            "time per iteration. Stay scoped — don't try to optimize the "
+            "whole repo at once.\n\n"
+            "You may author autoresearch.sh and autoresearch.checks.sh from "
+            "scratch — shell, python, anything. Only contract: autoresearch.sh "
+            "prints a single `METRIC name=value` line; autoresearch.checks.sh "
+            "exits 0 when correctness holds."
             f"{steer_block}\n\n"
             "Use the maxIterations cap from autoresearch.config.json. Stop "
-            "when it's hit. Auto-commit kept iterations. Infer everything "
-            "from the repo and this prompt."
+            "when it's hit. Auto-commit kept iterations."
         )
-        stderr("kickoff (auto-goal mode)")
+        stderr("kickoff (auto-goal mode, recon-first)")
     kickoff = {"id": "kickoff", "type": "prompt", "message": kickoff_message}
     send(proc, kickoff)
 
