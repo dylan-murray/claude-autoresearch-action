@@ -23,7 +23,10 @@ workflow writes before invoking us).
 Inputs (env vars):
   PI_PROVIDER       provider id passed to `pi --provider` (e.g. "ollama")
   PI_MODEL          model id passed to `pi --model` (e.g. "gpt-oss:120b-cloud")
-  GOAL_TEXT         the goal description (fed into the skill kickoff message)
+  GOAL_TEXT         the goal description. Empty string → auto-goal mode:
+                    pi-autoresearch picks its own metric based on the repo.
+  AUTO_GOAL_FOCUS   auto-mode only — comma-sep focus areas (tests, perf, ...)
+  AUTO_GOAL_IGNORE  auto-mode only — comma-sep glob patterns to avoid
   TIMEOUT_SECONDS   wall-clock backstop (default 3600)
   PI_BIN            path to pi binary (default "pi")
   EVENT_LOG         path to write JSONL event log (default ./pi-events.jsonl)
@@ -68,15 +71,14 @@ def main() -> int:
     provider = os.environ.get("PI_PROVIDER", "")
     model = os.environ.get("PI_MODEL", "")
     goal_text = os.environ.get("GOAL_TEXT", "").strip()
+    auto_focus = os.environ.get("AUTO_GOAL_FOCUS", "").strip()
+    auto_ignore = os.environ.get("AUTO_GOAL_IGNORE", "").strip()
     timeout = int(os.environ.get("TIMEOUT_SECONDS", "3600"))
     pi_bin = os.environ.get("PI_BIN", "pi")
     event_log = Path(os.environ.get("EVENT_LOG", "pi-events.jsonl"))
 
     if not provider or not model:
         stderr("PI_PROVIDER and PI_MODEL are required")
-        return 2
-    if not goal_text:
-        stderr("GOAL_TEXT is required")
         return 2
 
     cmd = [pi_bin, "--mode", "rpc", "--provider", provider, "--model", model]
@@ -101,19 +103,42 @@ def main() -> int:
     event_log.parent.mkdir(parents=True, exist_ok=True)
     log_fh = event_log.open("w", buffering=1)
 
-    kickoff = {
-        "id": "kickoff",
-        "type": "prompt",
-        "message": (
+    if goal_text:
+        kickoff_message = (
             "/skill:autoresearch-create\n\n"
             f"{goal_text}\n\n"
             "Use the maxIterations from autoresearch.config.json (already written). "
             "Stop when that cap is reached. Auto-commit kept iterations. Do not "
             "ask follow-up questions — infer from this prompt and the repo."
-        ),
-    }
+        )
+        stderr(f"kickoff (explicit goal): {goal_text[:80]}...")
+    else:
+        # Auto-goal mode: ask pi-autoresearch to scan the repo and pick a
+        # meaningful metric to optimize on its own. Pass focus/ignore hints
+        # so the user can steer without writing a full goal.
+        steers: list[str] = []
+        if auto_focus:
+            steers.append(f"Focus areas: {auto_focus}.")
+        if auto_ignore:
+            steers.append(f"Avoid these globs: {auto_ignore}.")
+        steer_block = ("\n\n" + "\n".join(steers)) if steers else ""
+        kickoff_message = (
+            "/skill:autoresearch-create\n\n"
+            "Auto-goal mode. Scan the repository and pick ONE meaningful, "
+            "mechanically-measurable metric to optimize. Examples of good "
+            "targets: lint warnings, type errors, test count, test runtime, "
+            "TODO count, coverage gap, dead-code lines. Avoid subjective "
+            "metrics. The benchmark must run in under 60s and print a single "
+            "`METRIC name=value` line. Define a backpressure check (build/"
+            "tests pass) so regressions revert. Then start iterating."
+            f"{steer_block}\n\n"
+            "Use the maxIterations from autoresearch.config.json (already "
+            "written). Stop when that cap is reached. Auto-commit kept "
+            "iterations. Do not ask follow-up questions — infer from the repo."
+        )
+        stderr("kickoff (auto-goal mode)")
+    kickoff = {"id": "kickoff", "type": "prompt", "message": kickoff_message}
     send(proc, kickoff)
-    stderr(f"kickoff sent (goal: {goal_text[:80]}...)")
 
     deadline = time.time() + timeout
     last_state_check = 0.0

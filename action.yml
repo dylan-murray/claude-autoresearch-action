@@ -7,21 +7,49 @@ branding:
 
 inputs:
   pi-provider:
-    description: 'Pi provider id (e.g. `ollama`, `anthropic`, `openai`). Determines which secret pi expects in env.'
+    description: 'Pi provider id. Anything Pi supports — pi reads its own provider env var, the action just forwards every key it received.'
     required: true
   pi-model:
     description: 'Pi model id (e.g. `gpt-oss:120b-cloud`, `anthropic/claude-sonnet-4-6`).'
     required: true
   ollama-api-key:
-    description: 'Ollama Cloud API key. Required iff `pi-provider` is `ollama`.'
+    description: 'Ollama Cloud API key.'
     required: false
     default: ''
   anthropic-api-key:
-    description: 'Anthropic API key. Required iff `pi-provider` is `anthropic`.'
+    description: 'Anthropic API key.'
     required: false
     default: ''
   openai-api-key:
-    description: 'OpenAI API key. Required iff `pi-provider` is `openai`.'
+    description: 'OpenAI API key.'
+    required: false
+    default: ''
+  google-api-key:
+    description: 'Google AI / Gemini API key.'
+    required: false
+    default: ''
+  groq-api-key:
+    description: 'Groq API key.'
+    required: false
+    default: ''
+  mistral-api-key:
+    description: 'Mistral API key.'
+    required: false
+    default: ''
+  openrouter-api-key:
+    description: 'OpenRouter API key.'
+    required: false
+    default: ''
+  xai-api-key:
+    description: 'xAI / Grok API key.'
+    required: false
+    default: ''
+  cerebras-api-key:
+    description: 'Cerebras API key.'
+    required: false
+    default: ''
+  deepseek-api-key:
+    description: 'DeepSeek API key.'
     required: false
     default: ''
   pi-autoresearch-ref:
@@ -40,32 +68,6 @@ inputs:
 runs:
   using: composite
   steps:
-    - name: Verify provider credentials
-      shell: bash
-      env:
-        PROVIDER: ${{ inputs.pi-provider }}
-        OLLAMA_KEY: ${{ inputs.ollama-api-key }}
-        ANTHROPIC_KEY: ${{ inputs.anthropic-api-key }}
-        OPENAI_KEY: ${{ inputs.openai-api-key }}
-      run: |
-        set -e
-        case "$PROVIDER" in
-          ollama)
-            [ -n "$OLLAMA_KEY" ] || { echo "::error::pi-provider=ollama requires ollama-api-key"; exit 1; }
-            ;;
-          anthropic)
-            [ -n "$ANTHROPIC_KEY" ] || { echo "::error::pi-provider=anthropic requires anthropic-api-key"; exit 1; }
-            ;;
-          openai)
-            [ -n "$OPENAI_KEY" ] || { echo "::error::pi-provider=openai requires openai-api-key"; exit 1; }
-            ;;
-          *)
-            echo "::error::Unsupported pi-provider: $PROVIDER (supported: ollama, anthropic, openai)"
-            exit 1
-            ;;
-        esac
-        echo "provider=$PROVIDER ok"
-
     - name: Setup Node.js
       uses: actions/setup-node@v4
       with:
@@ -81,24 +83,41 @@ runs:
     - name: Install ollama (provider=ollama)
       if: inputs.pi-provider == 'ollama'
       shell: bash
-      env:
-        OLLAMA_API_KEY: ${{ inputs.ollama-api-key }}
       run: |
         set -e
         curl -fsSL https://ollama.com/install.sh | sh
         ollama --version
-        # Make the key available to subsequent steps without re-passing
-        echo "OLLAMA_API_KEY=$OLLAMA_API_KEY" >> "$GITHUB_ENV"
 
-    - name: Export provider keys to subsequent steps
+    - name: Export provider keys
       shell: bash
       env:
+        OLLAMA_KEY: ${{ inputs.ollama-api-key }}
         ANTHROPIC_KEY: ${{ inputs.anthropic-api-key }}
         OPENAI_KEY: ${{ inputs.openai-api-key }}
+        GOOGLE_KEY: ${{ inputs.google-api-key }}
+        GROQ_KEY: ${{ inputs.groq-api-key }}
+        MISTRAL_KEY: ${{ inputs.mistral-api-key }}
+        OPENROUTER_KEY: ${{ inputs.openrouter-api-key }}
+        XAI_KEY: ${{ inputs.xai-api-key }}
+        CEREBRAS_KEY: ${{ inputs.cerebras-api-key }}
+        DEEPSEEK_KEY: ${{ inputs.deepseek-api-key }}
       run: |
         set -e
-        if [ -n "$ANTHROPIC_KEY" ]; then echo "ANTHROPIC_API_KEY=$ANTHROPIC_KEY" >> "$GITHUB_ENV"; fi
-        if [ -n "$OPENAI_KEY" ]; then echo "OPENAI_API_KEY=$OPENAI_KEY" >> "$GITHUB_ENV"; fi
+        # Forward every non-empty key under its provider's standard env-var
+        # name. Pi only reads the one matching --provider; the rest are
+        # ignored. We don't validate "provider X needs key Y" here — let pi
+        # surface that error itself, since the supported provider list grows.
+        emit() { local var="$1" val="$2"; if [ -n "$val" ]; then echo "$var=$val" >> "$GITHUB_ENV"; fi; }
+        emit OLLAMA_API_KEY     "$OLLAMA_KEY"
+        emit ANTHROPIC_API_KEY  "$ANTHROPIC_KEY"
+        emit OPENAI_API_KEY     "$OPENAI_KEY"
+        emit GOOGLE_API_KEY     "$GOOGLE_KEY"
+        emit GROQ_API_KEY       "$GROQ_KEY"
+        emit MISTRAL_API_KEY    "$MISTRAL_KEY"
+        emit OPENROUTER_API_KEY "$OPENROUTER_KEY"
+        emit XAI_API_KEY        "$XAI_KEY"
+        emit CEREBRAS_API_KEY   "$CEREBRAS_KEY"
+        emit DEEPSEEK_API_KEY   "$DEEPSEEK_KEY"
 
     - name: Install pi-autoresearch extension
       shell: bash

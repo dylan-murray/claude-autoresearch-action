@@ -31,8 +31,9 @@ on:
   workflow_dispatch:
     inputs:
       goal:
-        description: 'What to optimize. Include the metric command and files in scope.'
-        required: true
+        description: 'What to optimize. Leave blank for auto-goal mode.'
+        required: false
+        default: ''
 permissions:
   contents: write
   pull-requests: write
@@ -48,24 +49,40 @@ jobs:
       max-iterations: '10'
 ```
 
-Set one of the following secrets on your repo, matching `pi-provider`:
+Set whichever secret matches your `pi-provider`. The action wires every simple-API-key provider Pi supports:
 
-| Provider | Secret |
+| Provider | Secret name |
 |---|---|
 | `ollama` | `OLLAMA_API_KEY` |
 | `anthropic` | `ANTHROPIC_API_KEY` |
 | `openai` | `OPENAI_API_KEY` |
+| `google` | `GOOGLE_API_KEY` |
+| `groq` | `GROQ_API_KEY` |
+| `mistral` | `MISTRAL_API_KEY` |
+| `openrouter` | `OPENROUTER_API_KEY` |
+| `xai` | `XAI_API_KEY` |
+| `cerebras` | `CEREBRAS_API_KEY` |
+| `deepseek` | `DEEPSEEK_API_KEY` |
+
+Bedrock and Azure aren't wired here yet (they need OIDC / IAM setup).
+
+### Two modes
+
+- **Auto-goal** (`goal: ''` or omitted): the agent scans the repo and picks a meaningful metric on its own — TODO count, lint warnings, type errors, test runtime, etc. Optionally steer with `focus: 'tests,perf'` and `ignore: 'vendor/**,node_modules/**'`.
+- **Explicit goal** (`goal: '...'`): you describe what to optimize, the metric command, and the backpressure check. More predictable; use when you know what you want.
 
 ## Reusable workflow inputs
 
 | Input | Default | Notes |
 |---|---|---|
-| `pi-provider` | *(required)* | `ollama` \| `anthropic` \| `openai` |
-| `pi-model` | *(required)* | Model id, e.g. `gpt-oss:120b-cloud`, `anthropic/claude-sonnet-4-6` |
-| `goal` | *(required)* | Goal text fed to `/skill:autoresearch-create`. Should describe what to optimize, the metric command (printing `METRIC name=value`), the backpressure check, and which files are in scope. |
+| `pi-provider` | *(required)* | Anything Pi supports — `ollama`, `anthropic`, `openai`, `google`, `groq`, `mistral`, `openrouter`, `xai`, `cerebras`, `deepseek`, etc. |
+| `pi-model` | *(required)* | Model id (e.g. `gpt-oss:120b-cloud`, `anthropic/claude-sonnet-4-6`, `openrouter/google/gemini-2.0-flash`) |
+| `goal` | `''` | Goal text. Empty → auto-goal mode. |
+| `focus` | `''` | Auto-goal only: comma-sep focus areas (`tests,perf,docs`) |
+| `ignore` | `''` | Auto-goal only: comma-sep glob patterns to avoid |
 | `max-iterations` | `'10'` | Written to `autoresearch.config.json`. pi-autoresearch self-stops at this cap. |
-| `timeout-minutes` | `'60'` | Wall-clock backstop for the run-loop job. RPC driver fires `abort` ~5 min before this if pi hasn't stopped on its own. |
-| `pi-autoresearch-ref` | `https://github.com/davebcn87/pi-autoresearch` | Pin to a specific commit for reproducibility. |
+| `timeout-minutes` | `'60'` | Wall-clock backstop. RPC driver fires `abort` ~5 min before this if pi hasn't stopped. |
+| `pi-autoresearch-ref` | `https://github.com/davebcn87/pi-autoresearch` | Pin to a commit for reproducibility |
 | `git-user-name` | `autoresearch-bot` | |
 | `git-user-email` | `autoresearch-bot@users.noreply.github.com` | |
 

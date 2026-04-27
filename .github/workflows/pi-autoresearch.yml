@@ -25,15 +25,23 @@ on:
       pi-provider:
         type: string
         required: true
-        description: 'Pi provider id (ollama | anthropic | openai). Determines which secret pi expects.'
+        description: 'Pi provider id. Anything pi supports — e.g. ollama, anthropic, openai, google, groq, mistral, openrouter, xai, cerebras, deepseek. (Bedrock and Azure not yet wired here — they need extra IAM/identity setup.)'
       pi-model:
         type: string
         required: true
-        description: 'Pi model id (e.g. gpt-oss:120b-cloud, anthropic/claude-sonnet-4-6).'
+        description: 'Pi model id (e.g. gpt-oss:120b-cloud, anthropic/claude-sonnet-4-6, openai/gpt-4o, openrouter/google/gemini-2.0-flash).'
       goal:
         type: string
-        required: true
-        description: 'Goal description fed to /skill:autoresearch-create. Include the metric command, files in scope, and any constraints.'
+        default: ''
+        description: 'Goal description fed to /skill:autoresearch-create. Leave empty for auto-goal mode — pi-autoresearch will analyze the repo and pick its own metric to optimize.'
+      focus:
+        type: string
+        default: ''
+        description: 'Auto-goal mode only: comma-separated focus areas the chooser should consider (e.g. tests,perf,docs,types).'
+      ignore:
+        type: string
+        default: ''
+        description: 'Auto-goal mode only: comma-separated glob patterns the chooser should avoid (e.g. node_modules/**,vendor/**).'
       max-iterations:
         type: string
         default: '10'
@@ -52,15 +60,11 @@ on:
       git-user-email:
         type: string
         default: 'autoresearch-bot@users.noreply.github.com'
-    # No declared secrets — consumers use `secrets: inherit` and set one of:
-    #   OLLAMA_API_KEY, ANTHROPIC_API_KEY, OPENAI_API_KEY
-    # depending on pi-provider.
-
-# Serialize runs against the same caller repo. Two overlapping runs would
-# clobber the experiment branch.
-concurrency:
-  group: pi-autoresearch-${{ github.repository }}
-  cancel-in-progress: false
+    # No declared secrets — consumers use `secrets: inherit` and set whichever
+    # provider key matches pi-provider, e.g. OLLAMA_API_KEY, ANTHROPIC_API_KEY,
+    # OPENAI_API_KEY, GOOGLE_API_KEY, GROQ_API_KEY, MISTRAL_API_KEY,
+    # OPENROUTER_API_KEY, XAI_API_KEY, CEREBRAS_API_KEY, DEEPSEEK_API_KEY.
+    # Pi reads its provider's standard env var; the action forwards all candidates.
 
 permissions:
   contents: write
@@ -111,6 +115,13 @@ jobs:
           ollama-api-key: ${{ secrets.OLLAMA_API_KEY }}
           anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
           openai-api-key: ${{ secrets.OPENAI_API_KEY }}
+          google-api-key: ${{ secrets.GOOGLE_API_KEY }}
+          groq-api-key: ${{ secrets.GROQ_API_KEY }}
+          mistral-api-key: ${{ secrets.MISTRAL_API_KEY }}
+          openrouter-api-key: ${{ secrets.OPENROUTER_API_KEY }}
+          xai-api-key: ${{ secrets.XAI_API_KEY }}
+          cerebras-api-key: ${{ secrets.CEREBRAS_API_KEY }}
+          deepseek-api-key: ${{ secrets.DEEPSEEK_API_KEY }}
           pi-autoresearch-ref: ${{ inputs.pi-autoresearch-ref }}
           git-user-name: ${{ inputs.git-user-name }}
           git-user-email: ${{ inputs.git-user-email }}
@@ -144,6 +155,8 @@ jobs:
           PI_PROVIDER: ${{ inputs.pi-provider }}
           PI_MODEL: ${{ inputs.pi-model }}
           GOAL_TEXT: ${{ inputs.goal }}
+          AUTO_GOAL_FOCUS: ${{ inputs.focus }}
+          AUTO_GOAL_IGNORE: ${{ inputs.ignore }}
           # Driver's wall-clock backstop = (job timeout - 5 min margin)
           TIMEOUT_SECONDS: ${{ fromJson(inputs.timeout-minutes) * 60 - 300 }}
           EVENT_LOG: pi-events.jsonl
@@ -204,11 +217,27 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -e
+          # In auto-goal mode we don't have a user-supplied goal — pull what
+          # pi-autoresearch chose from autoresearch.md's first heading, fall
+          # back to a generic title.
+          if [ -z "$GOAL" ]; then
+            if [ -f ./_pi-run/autoresearch.md ]; then
+              GOAL=$(awk '/^# / {sub(/^# */, ""); print; exit}' ./_pi-run/autoresearch.md)
+            fi
+            : "${GOAL:=auto-goal experiment}"
+            GOAL_LABEL="**Goal (auto-chosen):** $GOAL"
+          else
+            GOAL_LABEL="**Goal:** $GOAL"
+          fi
+          # Trim title to a reasonable length for GitHub.
+          TITLE="autoresearch: $GOAL"
+          TITLE="${TITLE:0:140}"
+
           BODY_FILE=$(mktemp)
           {
             echo "## Autoresearch experiment"
             echo
-            echo "**Goal:** $GOAL"
+            echo "$GOAL_LABEL"
             echo
             echo "| | |"
             echo "|---|---|"
@@ -238,7 +267,7 @@ jobs:
           gh pr create \
             --base main \
             --head "$BRANCH" \
-            --title "autoresearch: $GOAL" \
+            --title "$TITLE" \
             --label autoresearch \
             --body-file "$BODY_FILE"
 
