@@ -44,6 +44,10 @@ inputs:
     description: 'Whether to open a PR after the loop. `true` (default) | `false` (just push the experiment branch).'
     required: false
     default: 'true'
+  stream-events:
+    description: 'Print a one-liner per pi event to the action log (live transcript). `false` (default) | `true`. WARNING: event content can include file bodies, tool args, env values, and other repo state. On public repos these logs are world-readable — leave off unless you trust everyone who can see the run.'
+    required: false
+    default: 'false'
   git-user-name:
     required: false
     default: 'autoresearch-bot'
@@ -180,6 +184,7 @@ runs:
         # sweeps it into every commit, bloating the PR diff with megabytes
         # of streaming agent traces.
         EVENT_LOG: ${{ runner.temp }}/pi-events.jsonl
+        STREAM_EVENTS: ${{ inputs.stream-events }}
         ACTION_PATH: ${{ github.action_path }}
       run: |
         set -e

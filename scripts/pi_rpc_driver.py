@@ -147,6 +147,10 @@ def main() -> int:
     timeout = int(os.environ.get("TIMEOUT_SECONDS", "3600"))
     pi_bin = os.environ.get("PI_BIN", "pi")
     event_log = Path(os.environ.get("EVENT_LOG", "pi-events.jsonl"))
+    # Live event streaming to stdout is opt-in: it can expose file contents,
+    # tool args, and other repo state to whoever can read the action log
+    # (everyone on public repos). Off by default.
+    stream_events = os.environ.get("STREAM_EVENTS", "").lower() == "true"
 
     if not provider or not model:
         stderr("PI_PROVIDER and PI_MODEL are required")
@@ -266,10 +270,13 @@ def main() -> int:
         except json.JSONDecodeError:
             continue
 
-        # Stream a humanized one-liner per event so the action log is readable
-        digest = digest_event(event)
-        if digest:
-            stream(digest)
+        # Optionally stream a humanized one-liner per event. Off by default —
+        # event content can include file bodies / tool args / other repo state
+        # that shouldn't land in publicly-readable workflow logs.
+        if stream_events:
+            digest = digest_event(event)
+            if digest:
+                stream(digest)
 
         # State response → idleness detection
         if (

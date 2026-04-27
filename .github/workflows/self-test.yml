@@ -22,6 +22,10 @@ on:
         description: 'maxIterations (default 3 for smoke)'
         type: string
         default: '3'
+      stream-events:
+        description: 'Stream pi events live to the action log (verbose; may show repo content)'
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -43,6 +47,7 @@ jobs:
           driver-timeout-seconds: '1500'
           # Empty goal → auto-goal mode (pi picks its own metric).
           goal: ''
+          stream-events: ${{ inputs.stream-events }}
         env:
           # Add whichever provider keys you have set as secrets. Pi reads
           # only the one matching `pi-provider`; the rest are ignored.
