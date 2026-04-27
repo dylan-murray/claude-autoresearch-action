@@ -290,8 +290,7 @@ def main() -> int:
             if not is_streaming and pending == 0:
                 consecutive_idle += 1
                 stderr(
-                    f"idle check {consecutive_idle}/2 "
-                    f"(streaming={is_streaming}, pending={pending})"
+                    f"idle check {consecutive_idle}/2 (streaming={is_streaming}, pending={pending})"
                 )
                 if consecutive_idle >= 2:
                     stderr("agent idle for two consecutive checks — done")
