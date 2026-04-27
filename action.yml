@@ -139,7 +139,7 @@ runs:
         git config --global user.email "$GIT_USER_EMAIL"
         git config --global init.defaultBranch main
 
-    - name: Generate run-id
+    - name: Generate run-id and check out experiment branch
       id: gen
       shell: bash
       env:
@@ -148,14 +148,22 @@ runs:
         set -e
         RUN_ID="$(date -u +%Y%m%d-%H%M%S)-$(openssl rand -hex 3)"
         EXPERIMENT_DIR=".autoresearch/exp/${RUN_ID}"
+        EXPERIMENT_BRANCH="autoresearch/exp/${RUN_ID}"
         echo "run-id=$RUN_ID" >> "$GITHUB_OUTPUT"
         echo "experiment-dir=$EXPERIMENT_DIR" >> "$GITHUB_OUTPUT"
-        echo "run_id=$RUN_ID experiment_dir=$EXPERIMENT_DIR"
-        # pi-autoresearch's autoresearch-create skill does
-        # `git checkout -b autoresearch/<goal>-<date>` itself, so we don't
-        # pre-create a branch — we just sit on $BASE and let pi spin its own.
+        echo "experiment-branch=$EXPERIMENT_BRANCH" >> "$GITHUB_OUTPUT"
+        echo "run_id=$RUN_ID experiment_branch=$EXPERIMENT_BRANCH experiment_dir=$EXPERIMENT_DIR"
+        # pi-autoresearch's `autoresearch-create` skill is documented to do
+        # `git checkout -b autoresearch/<goal>-<date>` itself, but it does
+        # so inconsistently — some runs it does, others it commits straight
+        # to whatever HEAD was on. To prevent silently losing pi's work to
+        # a no-branch state, we pre-create the experiment branch from base
+        # and check it out. If pi later creates its own branch on top,
+        # harvest follows HEAD; either way we always have a non-base branch
+        # to push.
         git fetch origin "$BASE"
-        git checkout "$BASE" 2>/dev/null || git checkout -b "$BASE" "origin/$BASE"
+        git branch "$EXPERIMENT_BRANCH" "origin/$BASE"
+        git checkout "$EXPERIMENT_BRANCH"
 
     - name: Write autoresearch.config.json
       shell: bash
@@ -216,27 +224,37 @@ runs:
         )
         moved=0
         mkdir -p "$EXPERIMENT_DIR"
-        for f in "${SESSION_FILES[@]}"; do
-          if [ -e "$f" ]; then
-            git mv "$f" "$EXPERIMENT_DIR/$f"
-            moved=$((moved+1))
+        # Move tracked files via `git mv` (preserves history); untracked ones
+        # via plain `mv` (the action wrote autoresearch.config.json itself
+        # before pi ran, and pi's log_experiment may not have staged it if
+        # the loop never iterated). The trailing commit guard handles both.
+        relocate() {
+          local src="$1" dst="$2"
+          if git ls-files --error-unmatch "$src" >/dev/null 2>&1; then
+            git mv "$src" "$dst"
+          else
+            mv "$src" "$dst"
           fi
-        done
-        # autoresearch.hooks/ if it exists
-        if [ -d autoresearch.hooks ]; then
-          git mv autoresearch.hooks "$EXPERIMENT_DIR/autoresearch.hooks"
           moved=$((moved+1))
+        }
+        for f in "${SESSION_FILES[@]}"; do
+          [ -e "$f" ] && relocate "$f" "$EXPERIMENT_DIR/$f"
+        done
+        if [ -d autoresearch.hooks ]; then
+          relocate autoresearch.hooks "$EXPERIMENT_DIR/autoresearch.hooks"
         fi
         if [ "$moved" -eq 0 ]; then
           echo "No session files at repo root to relocate."
           exit 0
         fi
-        # Only commit if we're on a branch that has commits (pi created one).
-        # If HEAD is still on the base branch, the loop never ran — leave
-        # the moves uncommitted; harvest will detect the no-op and skip.
+        # Only commit if anything's actually staged. If pi never iterated,
+        # all moves were of untracked files → no staged changes → no commit;
+        # harvest's "still on base branch" check will then report 0 kept.
         if [ -n "$(git diff --cached --name-only)" ]; then
           git commit -m "chore(autoresearch): relocate session files to $EXPERIMENT_DIR"
           echo "Relocated $moved session entries; committed."
+        else
+          echo "Relocated $moved session entries (none tracked, nothing to commit)."
         fi
 
     - name: Harvest results
@@ -246,19 +264,27 @@ runs:
         BASE: ${{ inputs.base-branch }}
       run: |
         set -e
-        # pi-autoresearch's skill ran `git checkout -b autoresearch/<goal>-<date>`
-        # itself. Capture whatever branch HEAD is on now — that's pi's branch.
-        # If the loop never ran (driver crashed, no commits), HEAD is still on
-        # $BASE; we report 0 kept and skip the push.
+        # We pre-create autoresearch/exp/<run-id> in the gen step, so HEAD is
+        # always on a non-base branch. But if pi-autoresearch's skill ran its
+        # own `git checkout -b` on top, HEAD now points at *that*. Either way,
+        # capture HEAD and push it — but only if it has commits ahead of base,
+        # so we don't litter the remote with empty branches when pi did nothing.
         BRANCH=$(git rev-parse --abbrev-ref HEAD)
         if [ "$BRANCH" = "$BASE" ]; then
-          echo "::warning::HEAD is still on $BASE — pi-autoresearch didn't create a branch."
+          # Shouldn't happen given the pre-create; surface clearly if it does.
+          echo "::warning::HEAD is on $BASE — pre-created experiment branch missing?"
+          echo "branch=" >> "$GITHUB_OUTPUT"
+          echo "kept-commits=0" >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+        KEPT=$(git rev-list --count "origin/$BASE..$BRANCH")
+        if [ "$KEPT" -eq 0 ]; then
+          echo "::warning::Pi produced no commits on $BRANCH — skipping push."
           echo "branch=" >> "$GITHUB_OUTPUT"
           echo "kept-commits=0" >> "$GITHUB_OUTPUT"
           exit 0
         fi
         git push -u origin "$BRANCH"
-        KEPT=$(git rev-list --count "origin/$BASE..$BRANCH")
         echo "branch=$BRANCH" >> "$GITHUB_OUTPUT"
         echo "kept-commits=$KEPT" >> "$GITHUB_OUTPUT"
         echo "kept $KEPT commits on $BRANCH"
