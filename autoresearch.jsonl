@@ -1,0 +1,2 @@
+{"type":"config","name":"Optimizing digest_event throughput in pi_rpc_driver","metricName":"events_per_sec","metricUnit":"","bestDirection":"higher"}
+{"run":1,"commit":"c8909c6","metric":1862736.4,"metrics":{},"status":"discard","description":"Baseline: initial digest_event throughput measurement","timestamp":1777271856642,"segment":0,"confidence":null,"iterationTokens":166,"asi":{"baseline":true,"code_state":"original unoptimized","events_per_sec":1862736.4}}
