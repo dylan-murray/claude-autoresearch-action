@@ -61,7 +61,7 @@ Provider keys flow via `env:` on the step — Pi reads its provider's standard e
 | `ollama` | `OLLAMA_API_KEY` |
 | `anthropic` | `ANTHROPIC_API_KEY` |
 | `openai` | `OPENAI_API_KEY` |
-| `google` | `GOOGLE_API_KEY` |
+| `google` | `GEMINI_API_KEY` |
 | `groq` | `GROQ_API_KEY` |
 | `mistral` | `MISTRAL_API_KEY` |
 | `openrouter` | `OPENROUTER_API_KEY` |
