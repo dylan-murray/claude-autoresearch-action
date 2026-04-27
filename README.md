@@ -37,21 +37,26 @@ on:
 permissions:
   contents: write
   pull-requests: write
-  issues: write
 jobs:
   autoresearch:
-    uses: dylan-murray/pi-autoresearch-action/.github/workflows/pi-autoresearch.yml@main
-    secrets: inherit
-    with:
-      pi-provider: 'ollama'
-      pi-model: 'gpt-oss:120b-cloud'
-      goal: ${{ inputs.goal }}
-      max-iterations: '10'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - uses: dylan-murray/pi-autoresearch-action@main
+        with:
+          pi-provider: 'ollama'
+          pi-model: 'gpt-oss:120b-cloud'
+          goal: ${{ inputs.goal }}
+          max-iterations: '10'
+        env:
+          OLLAMA_API_KEY: ${{ secrets.OLLAMA_API_KEY }}
 ```
 
-Set whichever secret matches your `pi-provider`. The action wires every simple-API-key provider Pi supports:
+Provider keys flow via `env:` on the step — Pi reads its provider's standard env var directly. Set whichever matches your `pi-provider`:
 
-| Provider | Secret name |
+| Provider | Env var |
 |---|---|
 | `ollama` | `OLLAMA_API_KEY` |
 | `anthropic` | `ANTHROPIC_API_KEY` |
@@ -68,10 +73,10 @@ Bedrock and Azure aren't wired here yet (they need OIDC / IAM setup).
 
 ### Two modes
 
-- **Auto-goal** (`goal: ''` or omitted): the agent scans the repo and picks a meaningful metric on its own — TODO count, lint warnings, type errors, test runtime, etc. Optionally steer with `focus: 'tests,perf'` and `ignore: 'vendor/**,node_modules/**'`.
+- **Auto-goal** (`goal: ''` or omitted): the agent scans the repo and picks a meaningful metric on its own. Optionally steer with `focus: 'tests,perf'` and `ignore: 'vendor/**,node_modules/**'`.
 - **Explicit goal** (`goal: '...'`): you describe what to optimize, the metric command, and the backpressure check. More predictable; use when you know what you want.
 
-## Reusable workflow inputs
+## Inputs
 
 | Input | Default | Notes |
 |---|---|---|
@@ -81,34 +86,38 @@ Bedrock and Azure aren't wired here yet (they need OIDC / IAM setup).
 | `focus` | `''` | Auto-goal only: comma-sep focus areas (`tests,perf,docs`) |
 | `ignore` | `''` | Auto-goal only: comma-sep glob patterns to avoid |
 | `max-iterations` | `'10'` | Written to `autoresearch.config.json`. pi-autoresearch self-stops at this cap. |
-| `timeout-minutes` | `'60'` | Wall-clock backstop. RPC driver fires `abort` ~5 min before this if pi hasn't stopped. |
+| `driver-timeout-seconds` | `'3300'` | Wall-clock backstop for the RPC driver. Should be less than the job's `timeout-minutes` × 60 to leave room for harvest + PR. |
 | `pi-autoresearch-ref` | `https://github.com/davebcn87/pi-autoresearch` | Pin to a commit for reproducibility |
+| `base-branch` | `'main'` | Branch to base the experiment on, and to PR against |
+| `open-pr` | `'true'` | Set `'false'` to push the branch but skip the PR |
 | `git-user-name` | `autoresearch-bot` | |
 | `git-user-email` | `autoresearch-bot@users.noreply.github.com` | |
 
-## Architecture
+## Outputs
+
+| Output | Description |
+|---|---|
+| `run-id` | Generated run id |
+| `branch` | Experiment branch name |
+| `kept-commits` | Number of commits the loop kept |
+| `pr-url` | PR URL if one was opened |
+
+## What the action does
 
 ```
-setup
-  └─ generate run-id + branch name
-       ↓
-run-loop
-  ├─ install pi + pi-autoresearch extension
-  ├─ install ollama (if provider=ollama)
-  ├─ create experiment branch from main
-  ├─ write autoresearch.config.json
-  ├─ spawn `pi --mode rpc --provider X --model Y`
-  ├─ scripts/pi_rpc_driver.py:
-  │     • send /skill:autoresearch-create with goal
-  │     • stream JSONL events to pi-events.jsonl
-  │     • poll get_state every 30s, exit when idle for 2 consecutive checks
-  │     • abort + exit on wall-clock timeout
-  └─ push experiment branch
-       ↓
-open-pr (only if branch has commits)
-  └─ open PR with autoresearch.md session in the body
-       ↓
-finish (step summary)
+install pi + pi-autoresearch extension
+install ollama (if provider=ollama)
+create experiment branch from base
+write autoresearch.config.json (with maxIterations)
+spawn `pi --mode rpc --provider X --model Y`
+scripts/pi_rpc_driver.py:
+  • send /skill:autoresearch-create with goal (or auto-goal kickoff)
+  • stream JSONL events to pi-events.jsonl
+  • poll get_state every 30s, exit when idle for 2 consecutive checks
+  • abort + exit on wall-clock timeout
+push experiment branch
+open PR (if any commits kept and open-pr: true)
+upload run artifacts
 ```
 
 ## What gets opened on your repo
